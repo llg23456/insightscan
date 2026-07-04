@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>InsightScan 控制台</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+  <header class="header">
+    <div class="logo">InsightScan</div>
+    <nav class="nav">
+      <button class="nav-btn active" data-page="attack">主动探测</button>
+      <button class="nav-btn" data-page="defense">被动防御</button>
+      <button class="nav-btn" data-page="config">IP 配置</button>
+    </nav>
+  </header>
+
+  <main class="container">
+    <!-- 第一页：攻击 + 性能 -->
+    <section id="page-attack" class="page active">
+      <h1>主动探测 & 性能测试</h1>
+      <p class="desc">扫描目标开放端口、服务版本与漏洞风险，自动生成报告和截图。</p>
+
+      <div class="card">
+        <h2>扫描参数</h2>
+        <div class="form-row">
+          <label>目标</label>
+          <select id="attack-target-select">
+            <option value="127.0.0.1">127.0.0.1（本机）</option>
+            <option value="local_ip">本机局域网 IP</option>
+            <option value="cidr">C 段网段</option>
+            <option value="custom">自定义</option>
+          </select>
+        </div>
+        <div class="form-row" id="attack-custom-row" style="display:none">
+          <label>自定义目标</label>
+          <input type="text" id="attack-target-custom" placeholder="192.168.61.128 或 192.168.61.0/24">
+        </div>
+        <div class="form-row">
+          <label>端口</label>
+          <input type="text" id="attack-ports" value="22,80,443">
+        </div>
+        <div class="btn-group">
+          <button class="btn btn-primary" id="btn-attack">一键攻击</button>
+          <button class="btn btn-accent" id="btn-perf">一键性能测试</button>
+        </div>
+        <p class="hint">性能测试扫描 C 段 10/50/100 线程，约需 2 分钟。</p>
+      </div>
+
+      <div class="card" id="attack-status-card" style="display:none">
+        <h2>任务状态</h2>
+        <div class="status-bar"><div class="status-fill" id="attack-progress"></div></div>
+        <p id="attack-status-text">等待中...</p>
+        <div id="attack-result" class="result-box"></div>
+      </div>
+
+      <div class="card">
+        <h2>最近攻击报告</h2>
+        <ul id="attack-report-list" class="report-list"></ul>
+      </div>
+    </section>
+
+    <!-- 第二页：防御 -->
+    <section id="page-defense" class="page">
+      <h1>被动防御</h1>
+      <p class="desc">检测是否被扫描、网卡混杂模式，自动生成 iptables 防御规则。</p>
+
+      <div class="alert alert-warn">
+        <strong>重要：</strong>攻击与防御需<strong>两个终端</strong>同时运行才易检测到扫描。<br>
+        终端 1：在本页先点「一键攻击」扫本机 IP；终端 2：浏览器或另一终端点「一键防御」。<br>
+        若检测不到，在 VM 执行：<code>sudo ufw logging on</code>
+      </div>
+
+      <div class="card">
+        <h2>防御参数</h2>
+        <div class="form-row">
+          <label>监控时长（秒）</label>
+          <input type="number" id="defense-duration" value="60" min="0" max="600">
+        </div>
+        <div class="form-row checkbox-row">
+          <label><input type="checkbox" id="defense-iptables"> 自动部署 iptables（需 sudo）</label>
+        </div>
+        <button class="btn btn-primary" id="btn-defense">一键防御</button>
+      </div>
+
+      <div class="card" id="defense-status-card" style="display:none">
+        <h2>任务状态</h2>
+        <div class="status-bar"><div class="status-fill" id="defense-progress"></div></div>
+        <p id="defense-status-text">等待中...</p>
+        <div id="defense-result" class="result-box"></div>
+      </div>
+
+      <div class="card">
+        <h2>最近防御报告</h2>
+        <ul id="defense-report-list" class="report-list"></ul>
+      </div>
+    </section>
+
+    <!-- 第三页：配置 -->
+    <section id="page-config" class="page">
+      <h1>IP 与扫描配置</h1>
+      <p class="desc">配置本机 IP、C 段网段及默认扫描目标。保存后攻击/防御/性能测试均会使用。</p>
+
+      <div class="card">
+        <div class="btn-group" style="margin-bottom:16px">
+          <button class="btn btn-secondary" id="btn-detect">自动检测网段</button>
+          <button class="btn btn-secondary" id="btn-detect-apply">检测并应用</button>
+        </div>
+        <div class="form-grid">
+          <div class="form-row">
+            <label>本机 IP</label>
+            <input type="text" id="cfg-local-ip" placeholder="192.168.61.128">
+          </div>
+          <div class="form-row">
+            <label>C 段网段</label>
+            <input type="text" id="cfg-cidr" placeholder="192.168.61.0/24">
+          </div>
+          <div class="form-row">
+            <label>网关</label>
+            <input type="text" id="cfg-gateway" placeholder="192.168.61.2">
+          </div>
+          <div class="form-row">
+            <label>网卡</label>
+            <input type="text" id="cfg-interface" placeholder="ens33">
+          </div>
+          <div class="form-row">
+            <label>默认攻击目标</label>
+            <input type="text" id="cfg-attack-target" placeholder="127.0.0.1">
+          </div>
+          <div class="form-row">
+            <label>攻击端口</label>
+            <input type="text" id="cfg-attack-ports" placeholder="22,80,443">
+          </div>
+          <div class="form-row">
+            <label>性能测试 C 段</label>
+            <input type="text" id="cfg-perf-target" placeholder="192.168.61.0/24">
+          </div>
+          <div class="form-row">
+            <label>性能测试端口</label>
+            <input type="text" id="cfg-perf-ports" placeholder="22,80,443">
+          </div>
+        </div>
+        <button class="btn btn-primary" id="btn-save-config">保存配置</button>
+        <p id="config-msg" class="hint"></p>
+      </div>
+
+      <div class="card">
+        <h2>如何查看网段</h2>
+        <pre class="code-block">ip addr | grep "inet "
+# 示例: inet 192.168.61.128/24 → C 段写 192.168.61.0/24</pre>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">InsightScan · 运行在 Ubuntu VM · 报告目录 reports/</footer>
+  <script src="/static/js/main.js"></script>
+</body>
+</html>

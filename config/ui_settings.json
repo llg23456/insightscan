@@ -1,0 +1,12 @@
+{
+    "local_ip": "192.168.61.128",
+    "cidr": "192.168.61.0/24",
+    "gateway": "",
+    "interface": "ens33",
+    "attack_target": "127.0.0.1",
+    "attack_ports": "22,80,443",
+    "perf_target": "192.168.61.0/24",
+    "perf_ports": "22,80,443",
+    "defense_duration": 60,
+    "defense_apply_iptables": false
+}

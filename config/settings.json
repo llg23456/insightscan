@@ -1,0 +1,28 @@
+{
+    "scan": {
+        "default_ports": "1-1000",
+        "default_scan_type": "connect",
+        "max_threads": 50,
+        "timeout": 300,
+        "retry_count": 2
+    },
+    "ai": {
+        "model": "kimi-k2.6",
+        "temperature": 0.3,
+        "max_tokens": 1000,
+        "batch_size": 5,
+        "enable_cache": true
+    },
+    "report": {
+        "default_format": "markdown",
+        "output_dir": "reports",
+        "theme": "dark"
+    },
+    "security": {
+        "scan_detection_minutes": 60,
+        "log_sources": ["/var/log/syslog", "/var/log/auth.log"],
+        "high_risk_ports": [21, 23, 445, 3389, 6379, 27017, 1433, 5900],
+        "perf_test_cidr": "192.168.61.0/24",
+        "auto_block_scanners": false
+    }
+}

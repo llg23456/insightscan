@@ -1,0 +1,5 @@
+{
+    "kimi_api_key": "sk-你的APIKey",
+    "base_url": "https://api.moonshot.cn/v1",
+    "_comment": "国内 Key 用 api.moonshot.cn；模型推荐 kimi-k2.6（官网最新）或 moonshot-v1-8k"
+}
