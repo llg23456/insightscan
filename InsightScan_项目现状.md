@@ -1,28 +1,29 @@
 # InsightScan 项目现状
 
-> 最后更新：2026-07-04  
-> 适用环境：Ubuntu 22.04 VM + VMware 共享文件夹 `/mnt/hgfs/insightscan`  
-> 详细设计见：[InsightScan_完整思路书.md](InsightScan_完整思路书.md)
+> 最后更新：2026-07-04（Web 攻防联调 + 攻击套件 + 文档完善）  
+> 适用环境：Ubuntu 22.04 VM + VMware 共享文件夹 `/mnt/hgfs/insightscan`
+
+| 文档 | 用途 |
+|------|------|
+| **[InsightScan_项目说明.md](InsightScan_项目说明.md)** | 任务书 / 答辩：结构、亮点、流程 |
+| [README.md](README.md) | 安装与命令速查 |
+| [InsightScan_完整思路书.md](InsightScan_完整思路书.md) | 原始设计 |
+| [环境准备.md](环境准备.md) | 环境搭建 |
 
 ---
 
-## 一、当前环境（已确认）
+## 一、当前环境（示例，以你 VM 为准）
 
 | 项目 | 值 |
 |------|-----|
-| 本机 IP | `192.168.61.128` |
+| 本机 IP | `192.168.61.128`（请在 IP 配置页检测） |
 | 网段 | `192.168.61.0/24` |
 | 网卡 | `ens33` |
-| C 段扫描目标 | `192.168.61.0/24`（**不是** 192.168.1.0/24） |
-| AI 模型 | `kimi-k2.6`（config/settings.json） |
+| AI 模型 | `kimi-k2.6` |
 | API | `https://api.moonshot.cn/v1` |
-
-查看网段命令：
 
 ```bash
 ip addr | grep "inet "
-# 找 ens33 等非 lo 行，例如：
-# inet 192.168.61.128/24 → C 段写 192.168.61.0/24
 ```
 
 ---
@@ -31,192 +32,147 @@ ip addr | grep "inet "
 
 | 模块 | 文件 | 状态 |
 |------|------|------|
-| 配置 / 数据库 | `src/utils.py` | ✅ 已验收 |
-| Nmap 扫描引擎 | `src/scan_engine.py` | ✅ Connect/SYN/FIN 接口齐全 |
-| AI 分析 | `src/ai_analyzer.py` | ✅ Kimi + 缓存 + 本地降级 |
-| 报告生成 | `src/report_generator.py` | ✅ Markdown + HTML（嵌入 PNG） |
+| 配置 / 数据库 | `src/utils.py` | ✅ |
+| Nmap 扫描引擎 | `src/scan_engine.py` | ✅ Connect/SYN/FIN |
+| AI 分析 | `src/ai_analyzer.py` | ✅ Kimi + 缓存 + 降级 + 报告来源标注 |
+| 报告生成 | `src/report_generator.py` | ✅ MD/HTML + AI 来源节 |
 | CLI 入口 | `main.py` | ✅ |
-| 主动探测 | `src/attack_mode.py` | ✅ 已验收 |
-| 被动防御 | `src/defense_mode.py` | ✅ 已验收 |
-| 安全工具 | `src/security_tools.py` | ✅ 扫描检测 / 混杂模式 / iptables |
-| 性能实验 | `src/perf_benchmark.py` | ✅ 10/50/100 线程对比 |
-| 协议分析 | `src/protocol_analyzer.py` | ✅ 字段标注图 + tshark（可选） |
+| 主动探测 | `src/attack_mode.py` | ✅ 单扫描 + **攻击套件 run_attack_suite** |
+| 被动防御 | `src/defense_mode.py` | ✅ syslog + **DB 联动** |
+| 安全工具 | `src/security_tools.py` | ✅ 扫描检测 / 混杂 / iptables |
+| 性能实验 | `src/perf_benchmark.py` | ✅ 10/50/100 线程 |
+| 协议分析 | `src/protocol_analyzer.py` | ✅ |
+| Web 控制台 | `web/` + `run_web.py` | ✅ 三页 + 一键联调 |
+| Web 配置 | `src/ui_config.py` | ✅ 动态 IP + 自动检测 |
 | 单元测试 | `tests/` | ✅ |
+| 项目文档 | `InsightScan_项目说明.md` 等 | ✅ |
 
 ---
 
-## 三、2026-07-04 验收结果摘要
+## 三、验收结果摘要
 
-### 3.1 主动探测 `attack_20260704_113505`
+### 3.1 主动探测
 
-**命令**：`python3 main.py --attack -t 127.0.0.1 --ports 22,80,443`
+- 本机 `127.0.0.1`：SSH 22，AI 低危，HTML 报告正常  
+- **一键攻击套件**：Connect + SYN + FIN，报告含「攻击套件明细」  
+- SYN/FIN 无 sudo 时会失败，Connect 仍成功（预期）
 
-| 指标 | 结果 |
-|------|------|
-| 开放端口 | SSH 22 |
-| AI 风险 | 低危（OpenSSH 8.9，本地规则库/缓存） |
-| HTML 报告 | ✅ 正常，嵌入 screenshots PNG |
-| 问题 | 极快扫描时耗时曾显示「0秒」（已修复为显示小数） |
+### 3.2 性能实验（C 段 192.168.61.0/24）
 
-### 3.2 性能实验 `attack_20260704_113540`
+| 线程 | 耗时 | 结论 |
+|------|------|------|
+| 10 | 60.41s | |
+| 50 | **27.69s** | **最优** |
+| 100 | 32.24s | CPU 饱和略慢 |
 
-**命令**：`python3 main.py --attack -t 192.168.61.0/24 --ports 22,80,443 --perf`
+### 3.3 被动防御
 
-| 线程数 | 耗时 | 扫描主机 | CPU 峰值 | 内存峰值 |
-|--------|------|---------|----------|---------|
-| 10 | 60.41s | 254 | 92.3% | 131.3 MB |
-| 50 | **27.69s** | 254 | 100% | 134.7 MB |
-| 100 | 32.24s | 254 | 100% | 136.6 MB |
+- syslog 对 Connect 扫描常为 0（预期）  
+- **数据库联动**可检测到联调期间的 InsightScan 扫描  
+- 混杂模式、iptables 脚本生成正常  
 
-**结论**：本 VM 上 **50 线程最优**；100 线程因 CPU 饱和反而略慢。
+### 3.4 Web 控制台
 
-其他发现：
-- C 段存活主机 2 台，开放端口 1 个（192.168.61.128:22）
-- tshark 已安装但抓包 0 条（扫描期间无 HTTP/FTP 流量，属正常）
-
-### 3.3 被动防御 `defense_20260704_114047`
-
-**命令**：`python3 main.py --defense`
-
-| 检测项 | 结果 |
-|--------|------|
-| Nmap/SYN 明确扫描 | 0 次（扫描已结束或未写入 syslog） |
-| UFW 拦截 | 0 次 |
-| 混杂模式 ens33 | 否 ✅ |
-| 本机开放端口 | 2 个（SSH 等） |
-| iptables 规则 | 已生成 8 条（未自动部署，dry_run） |
+- 三 Tab：主动探测 / 被动防御 / IP 配置  
+- **一键攻防联调**：单页完成，随机 1~3 种攻击  
+- IP 配置保存后，切换 Tab 目标下拉同步  
 
 ---
 
 ## 四、报告目录规范
 
-每次 `--attack` 或 `--defense` 在 `reports/` 下创建独立目录：
-
 ```
 reports/
 ├── attack_YYYYMMDD_HHMMSS/
 │   ├── attack_report.md / .html
-│   ├── summary.json
-│   ├── perf_benchmark.md          # 仅 --perf 时
-│   ├── capture.pcap                 # tshark 可选
+│   ├── summary.json              # 含 attack_suite、ai_analysis
+│   ├── perf_benchmark.md         # --perf 时
 │   └── screenshots/
-│       ├── risk_distribution.png
-│       ├── open_ports.png
-│       ├── protocol_tcp_handshake.png
-│       ├── thread_perf_comparison.png   # --perf
-│       └── cpu_memory_usage.png         # --perf
 └── defense_YYYYMMDD_HHMMSS/
-    ├── defense_report.md
+    ├── defense_report.md         # 区分「监控秒数」与「日志回溯分钟」
     ├── scan_events.json
-    ├── summary.json
     ├── iptables_defense.sh
     └── screenshots/
-        ├── attack_timeline.png
-        └── promisc_mode_status.png
 ```
 
 ---
 
-## 五、两条核心命令（速查）
+## 五、核心命令速查
 
 ```bash
 cd /mnt/hgfs/insightscan
 
-# 主动探测：扫目标 → AI 分析 → 报告 + 截图
+# Web（推荐）
+python3 run_web.py
+
+# CLI 攻击
 python3 main.py --attack -t 127.0.0.1 --ports 22,80,443
 
-# C 段 + 性能实验
-python3 main.py --attack -t 192.168.61.0/24 --ports 22,80,443 --perf
-
-# 被动防御：检测被扫描 / 混杂模式 / 生成 iptables
+# CLI 防御
 python3 main.py --defense --duration 60
-```
 
-**防御模式要检测到扫描**，需另开终端先扫本机：
-
-```bash
-# 终端 1
-python3 main.py --attack -t 192.168.61.128 --ports 22,80,443
-
-# 终端 2（扫描进行中或刚结束）
-python3 main.py --defense
-```
-
-若仍检测不到，需开启 UFW 日志：
-
-```bash
-sudo ufw logging on
-sudo ufw status
+# 性能
+python3 main.py --attack -t 192.168.61.0/24 --ports 22,80,443 --perf
 ```
 
 ---
 
 ## 六、已知问题与限制
 
-| # | 问题 | 严重程度 | 说明 / 应对 |
-|---|------|---------|------------|
-| 1 | 报告时间显示 UTC | 低 | DB 存 UTC，界面比本地时间少 8 小时，不影响功能 |
-| 2 | 防御模式检测不到 Nmap | 中 | Connect 扫描默认不留 syslog 特征；需 UFW logging 或 SYN 扫描 |
-| 3 | 协议图非 Wireshark 实包 | 低 | `protocol_*.png` 为字段标注参考图；实包需 Wireshark 打开 `capture.pcap` 或手动抓包 |
-| 4 | tshark 抓包可能为 0 | 低 | 无 HTTP/FTP 流量时正常；实验可手动访问 `http://127.0.0.1` 后再跑 |
-| 5 | AI 单端口可能走本地规则 | 低 | Kimi JSON 解析失败时降级；历史对比等长文本仍走 API |
-| 6 | 防御报告未列具体端口 | 低 | summary.json 有 task_id，可查 DB 或后续前端展示 |
-| 7 | `--perf` 耗时较长 | 预期 | C 段跑 3 轮约 2 分钟，写实验报告够用 |
+| # | 问题 | 说明 / 应对 |
+|---|------|------------|
+| 1 | ~~报告时间 UTC~~ | **已修复**：新任务用本地时间；旧记录读取时自动转换 |
+| 2 | Connect 扫描 syslog 无特征 | 防御已加 **DB 联动**；可选 `sudo ufw logging on` |
+| 3 | SYN/FIN 需 root | Web 下 Connect 仍可用；完整三类型需 `sudo python3 run_web.py` |
+| 4 | 协议图为参考标注 | 实包用 Wireshark 打开 `capture.pcap` |
+| 5 | AI 缓存命中不调 API | 报告已标注；清空 `data/ai_cache.json` 可强制调 API |
+| 6 | tshark 可能 0 条 | 无 HTTP/FTP 流量时正常 |
 
 ---
 
-## 七、待办（下一阶段）
+## 七、待办（可选扩展）
 
-- [x] **Web 前端界面**（三页：攻击/防御/配置）→ `python3 run_web.py` 访问 http://VM_IP:8080
-- [ ] 实验一 SYN/FIN 对比（需 `sudo`）
-- [ ] Metasploitable / DVWA 靶机联调（用户提供 IP）
-- [ ] 协议分析：Wireshark 手动抓包截图补充进报告
-
----
-
-## 八、Web 控制台
-
-```bash
-python3 run_web.py
-# 浏览器打开 http://<VM_IP>:8080
-```
-
-| Tab | 功能 |
-|-----|------|
-| 主动探测 | 一键攻击 / 一键性能测试 |
-| 被动防御 | 一键防御（攻击需另开终端或另一浏览器标签） |
-| IP 配置 | 本机 IP、C 段、默认目标，支持自动检测 |
+- [x] Web 三页界面 + 一键攻防联调  
+- [x] 攻击套件（全套 / 随机）  
+- [x] 防御数据库联动  
+- [x] 任务书项目说明文档  
+- [ ] SYN/FIN 对比实验报告截图（需 sudo）  
+- [ ] Metasploitable / DVWA 靶机联调  
+- [ ] Wireshark 手动抓包截图进报告  
 
 ---
 
-## 九、新会话快速开始
+## 八、新会话快速开始
 
 ```bash
 cd /mnt/hgfs/insightscan
 
-# 1. 确认网段
-ip addr | grep "inet "
-
-# 2. 确认 API Key
-cat config/api_keys.json   # 应有 kimi_api_key
-
-# 3. 快速自检
-python3 src/utils.py
-python3 -m unittest discover -s tests -v
-
-# 4. 一次完整主动探测
-python3 main.py --attack -t 127.0.0.1 --ports 22,80,443
-
-# 5. 查看最新报告
-ls -lt reports/attack_* | head -3
+ip addr | grep "inet "                    # 1. 确认网段
+cat config/api_keys.json                  # 2. 确认 API Key
+python3 -m unittest discover -s tests -v  # 3. 自检
+python3 run_web.py                        # 4. 启动 Web
+# 浏览器 → IP 配置 → 检测并应用 → 保存 → 一键攻防联调
 ```
+
+---
+
+## 九、AI / API Key 说明
+
+| 项目 | 位置 |
+|------|------|
+| 密钥文件 | `config/api_keys.json` |
+| 读取 | `src/utils.py` → `load_api_key()` |
+| 调用 | `src/ai_analyzer.py` → OpenAI SDK → `api.moonshot.cn` |
+| 缓存 | `data/ai_cache.json` |
+| 报告 | `attack_report.md` 中「AI 分析来源」：API 次数 / 缓存 / 本地规则 |
 
 ---
 
 ## 十、相关文档
 
-| 文档 | 用途 |
-|------|------|
-| [README.md](README.md) | 安装、命令、实验指引 |
-| [InsightScan_完整思路书.md](InsightScan_完整思路书.md) | 原始设计与模块说明 |
-| **本文档** | 当前进度、验收数据、已知问题 |
+| 文档 | 何时读 |
+|------|--------|
+| **InsightScan_项目说明.md** | 写任务书、答辩、理清整体 |
+| README.md | 日常安装与命令 |
+| InsightScan_完整思路书.md | 模块级设计细节 |
+| 环境准备.md | 首次搭 VM 与共享文件夹 |

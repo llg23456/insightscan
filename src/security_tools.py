@@ -12,7 +12,7 @@ _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from src.utils import get_db_connection, get_setting, setup_logging
+from src.utils import get_db_connection, get_setting, setup_logging, format_display_time, now_local_str
 
 # 日志中识别扫描行为的正则（按优先级排列）
 SCAN_PATTERNS = [
@@ -32,13 +32,18 @@ DEFAULT_HIGH_RISK_PORTS = [21, 23, 445, 3389, 6379, 27017, 1433, 5900]
 
 
 class ScanBehaviorDetector:
-    """分析 syslog / journalctl，检测本机是否正被扫描。"""
+    """分析 syslog / journalctl / 扫描数据库，检测本机是否正被扫描。"""
 
-    def __init__(self, lookback_minutes: Optional[int] = None) -> None:
+    def __init__(
+        self,
+        lookback_minutes: Optional[int] = None,
+        local_ips: Optional[list[str]] = None,
+    ) -> None:
         self.logger = setup_logging()
         self.lookback_minutes = lookback_minutes or int(
-            get_setting("security.scan_detection_minutes", 60)
+            get_setting("security.scan_detection_minutes", 10)
         )
+        self.local_ips = local_ips or []
         self.log_sources = get_setting(
             "security.log_sources",
             ["/var/log/syslog", "/var/log/auth.log"],
@@ -54,17 +59,91 @@ class ScanBehaviorDetector:
         try:
             lines = self._collect_log_lines()
             events = self._parse_lines(lines)
+            db_events = self._detect_from_scan_database()
+            events.extend(db_events)
+            events = sorted(events, key=lambda x: x.get("timestamp", ""), reverse=True)
             summary = self._summarize(events)
             return {
                 "lookback_minutes": self.lookback_minutes,
+                "monitor_note": "日志回溯窗口（分钟），与持续监控秒数不同",
                 "total_events": len(events),
                 "events": events,
                 "summary": summary,
-                "checked_at": datetime.now().isoformat(sep=" ", timespec="seconds"),
+                "checked_at": now_local_str(),
+                "detection_sources": {
+                    "syslog_events": len(events) - len(db_events),
+                    "database_events": len(db_events),
+                },
             }
         except Exception as e:
             self.logger.error("扫描行为检测失败: %s", e)
             return {"error": f"扫描行为检测失败: {e}"}
+
+    def _detect_from_scan_database(self) -> list[dict[str, Any]]:
+        """
+        从 scan_tasks 表检测近期针对本机的 InsightScan/Nmap 扫描。
+
+        Connect 扫描通常不会写入 syslog，联调实验依赖此通道。
+        """
+        if not self.local_ips:
+            return []
+
+        conn = get_db_connection()
+        if isinstance(conn, dict):
+            return []
+
+        events: list[dict[str, Any]] = []
+        targets = set(self.local_ips) | {"127.0.0.1", "localhost"}
+        try:
+            from datetime import timedelta
+
+            cutoff = (
+                datetime.now() - timedelta(minutes=self.lookback_minutes)
+            ).strftime("%Y-%m-%d %H:%M:%S")
+            rows = conn.execute(
+                """
+                SELECT task_id, target, scan_type, start_time, status, total_ports
+                FROM scan_tasks
+                WHERE start_time >= ?
+                ORDER BY start_time DESC
+                LIMIT 30
+                """,
+                (cutoff,),
+            ).fetchall()
+
+            for row in rows:
+                target = row["target"] or ""
+                matched = target in targets
+                if not matched:
+                    for lip in self.local_ips:
+                        if lip and lip in target:
+                            matched = True
+                            break
+                if not matched:
+                    continue
+
+                ts = format_display_time(row["start_time"])
+                events.append(
+                    {
+                        "timestamp": ts,
+                        "source_ip": "本机 InsightScan",
+                        "attack_type": "Port Scan (InsightScan/Nmap)",
+                        "scan_type": row["scan_type"] or "connect",
+                        "severity": "high",
+                        "detection_method": "database",
+                        "task_id": row["task_id"],
+                        "log_line": (
+                            f"数据库记录: task_id={row['task_id']} "
+                            f"target={target} ports_open={row['total_ports']} "
+                            f"status={row['status']}"
+                        ),
+                    }
+                )
+        except Exception as e:
+            self.logger.warning("数据库扫描检测失败: %s", e)
+        finally:
+            conn.close()
+        return events
 
     def _collect_log_lines(self) -> list[str]:
         """从 journalctl 和日志文件收集最近日志行。"""
@@ -166,7 +245,10 @@ class ScanBehaviorDetector:
         types: dict[str, int] = {}
         real_scan_events = [
             e for e in events
-            if e.get("attack_type") in ("Nmap Scan", "Port Scan", "SYN Scan/Flood", "Stealth Scan")
+            if e.get("attack_type") in (
+                "Nmap Scan", "Port Scan", "SYN Scan/Flood", "Stealth Scan",
+                "Port Scan (InsightScan/Nmap)",
+            )
         ]
         for e in events:
             src = e.get("source_ip", "unknown")

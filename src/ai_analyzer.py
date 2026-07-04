@@ -512,10 +512,20 @@ class AIAnalyzer:
                 host_summaries.append(self.analyze_host(host_ip, port_analyses))
 
             cache_hits = sum(1 for a in analyses if a.get("from_cache"))
+            api_calls = sum(
+                1 for a in analyses
+                if a.get("source") == "kimi" and not a.get("from_cache")
+            )
+            local_rules = sum(1 for a in analyses if a.get("source") == "local")
+            api_status = "已配置" if self._api_available else "未配置或无效"
             return {
                 "task_id": task_id,
                 "total_ports": len(analyses),
                 "cache_hits": cache_hits,
+                "api_calls": api_calls,
+                "local_rules": local_rules,
+                "api_key_status": api_status,
+                "model": self.model,
                 "hosts": host_summaries,
             }
 

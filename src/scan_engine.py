@@ -24,6 +24,7 @@ from src.utils import (
     get_setting,
     init_db,
     load_settings,
+    now_local_str,
     setup_logging,
     validate_ip,
     validate_ports,
@@ -409,8 +410,11 @@ class ScanEngine:
 
         try:
             cursor = conn.execute(
-                "INSERT INTO scan_tasks (target, scan_type, status) VALUES (?, ?, 'running')",
-                (target, scan_type),
+                """
+                INSERT INTO scan_tasks (target, scan_type, status, start_time)
+                VALUES (?, ?, 'running', ?)
+                """,
+                (target, scan_type, now_local_str()),
             )
             conn.commit()
             return cursor.lastrowid
@@ -442,7 +446,7 @@ class ScanEngine:
                 WHERE task_id = ?
                 """,
                 (
-                    datetime.now().isoformat(sep=" ", timespec="seconds"),
+                    now_local_str(),
                     status,
                     total_hosts,
                     total_ports,

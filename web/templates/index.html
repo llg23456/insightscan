@@ -17,35 +17,46 @@
   </header>
 
   <main class="container">
-    <!-- 第一页：攻击 + 性能 -->
     <section id="page-attack" class="page active">
       <h1>主动探测 & 性能测试</h1>
-      <p class="desc">扫描目标开放端口、服务版本与漏洞风险，自动生成报告和截图。</p>
+      <p class="desc">一键攻击包含 <strong>Connect + SYN + FIN</strong> 三种扫描；攻防联调时防御侧会触发<strong>随机 1~3 种</strong>攻击。</p>
+
+      <div class="card card-highlight">
+        <h2>一键攻防联调（推荐）</h2>
+        <p class="hint">先开防御监听 → 再发起<strong>随机攻击</strong>，无需第二个终端。</p>
+        <div class="form-row">
+          <label>联调目标</label>
+          <select id="attack-target-select" class="target-select"></select>
+        </div>
+        <div class="form-row target-custom-row" id="attack-target-custom-row" style="display:none">
+          <label>自定义目标</label>
+          <input type="text" id="attack-target-custom" placeholder="IP 或 CIDR">
+        </div>
+        <button class="btn btn-drill" id="btn-drill-attack">一键攻防联调</button>
+      </div>
 
       <div class="card">
-        <h2>扫描参数</h2>
+        <h2>单独攻击 / 性能</h2>
         <div class="form-row">
           <label>目标</label>
-          <select id="attack-target-select">
-            <option value="127.0.0.1">127.0.0.1（本机）</option>
-            <option value="local_ip">本机局域网 IP</option>
-            <option value="cidr">C 段网段</option>
-            <option value="custom">自定义</option>
-          </select>
+          <select id="attack-solo-target-select" class="target-select"></select>
         </div>
-        <div class="form-row" id="attack-custom-row" style="display:none">
+        <div class="form-row target-custom-row" id="attack-solo-custom-row" style="display:none">
           <label>自定义目标</label>
-          <input type="text" id="attack-target-custom" placeholder="192.168.61.128 或 192.168.61.0/24">
+          <input type="text" id="attack-solo-target-custom" placeholder="IP 或 CIDR">
         </div>
         <div class="form-row">
           <label>端口</label>
-          <input type="text" id="attack-ports" value="22,80,443">
+          <input type="text" id="attack-ports" placeholder="22,80,443">
+        </div>
+        <div class="form-row checkbox-row">
+          <label><input type="checkbox" id="attack-with-defense"> 攻击时同时开启防御（等同攻防联调）</label>
         </div>
         <div class="btn-group">
-          <button class="btn btn-primary" id="btn-attack">一键攻击</button>
+          <button class="btn btn-primary" id="btn-attack">一键攻击（全套 Connect+SYN+FIN）</button>
           <button class="btn btn-accent" id="btn-perf">一键性能测试</button>
         </div>
-        <p class="hint">性能测试扫描 C 段 10/50/100 线程，约需 2 分钟。</p>
+        <p class="hint attack-types-hint" id="attack-types-hint"></p>
       </div>
 
       <div class="card" id="attack-status-card" style="display:none">
@@ -55,31 +66,60 @@
         <div id="attack-result" class="result-box"></div>
       </div>
 
+      <div class="card" id="drill-status-card" style="display:none">
+        <h2>攻防联调状态</h2>
+        <div class="status-bar"><div class="status-fill" id="drill-progress"></div></div>
+        <p id="drill-status-text">等待中...</p>
+        <div id="drill-result" class="result-box"></div>
+      </div>
+
       <div class="card">
         <h2>最近攻击报告</h2>
         <ul id="attack-report-list" class="report-list"></ul>
       </div>
     </section>
 
-    <!-- 第二页：防御 -->
     <section id="page-defense" class="page">
       <h1>被动防御</h1>
-      <p class="desc">检测是否被扫描、网卡混杂模式，自动生成 iptables 防御规则。</p>
+      <p class="desc">检测被扫描、混杂模式，生成 iptables 规则。联调时自动发起随机攻击。</p>
 
-      <div class="alert alert-warn">
-        <strong>重要：</strong>攻击与防御需<strong>两个终端</strong>同时运行才易检测到扫描。<br>
-        终端 1：在本页先点「一键攻击」扫本机 IP；终端 2：浏览器或另一终端点「一键防御」。<br>
-        若检测不到，在 VM 执行：<code>sudo ufw logging on</code>
+      <div class="alert alert-info" id="defense-pair-alert" style="display:none">
+        <strong>检测到攻击进行中</strong> — 点击「一键防御」将立即接续监听。
+      </div>
+
+      <div class="card card-highlight">
+        <h2>一键攻防联调</h2>
+        <div class="form-row">
+          <label>攻击目标</label>
+          <select id="defense-target-select" class="target-select"></select>
+        </div>
+        <div class="form-row target-custom-row" id="defense-target-custom-row" style="display:none">
+          <label>自定义目标</label>
+          <input type="text" id="defense-target-custom" placeholder="IP 或 CIDR">
+        </div>
+        <p class="hint">将随机执行 1~3 种扫描类型（Connect / SYN / FIN）</p>
+        <button class="btn btn-drill" id="btn-drill-defense">一键攻防联调</button>
       </div>
 
       <div class="card">
-        <h2>防御参数</h2>
+        <h2>接续 / 单独防御</h2>
+        <div class="form-row">
+          <label>监听目标（与攻击目标一致）</label>
+          <select id="defense-solo-target-select" class="target-select"></select>
+        </div>
+        <div class="form-row target-custom-row" id="defense-solo-custom-row" style="display:none">
+          <label>自定义目标</label>
+          <input type="text" id="defense-solo-target-custom" placeholder="IP 或 CIDR">
+        </div>
         <div class="form-row">
           <label>监控时长（秒）</label>
           <input type="number" id="defense-duration" value="60" min="0" max="600">
         </div>
         <div class="form-row checkbox-row">
           <label><input type="checkbox" id="defense-iptables"> 自动部署 iptables（需 sudo）</label>
+        </div>
+        <div class="form-row checkbox-row">
+          <label><input type="checkbox" id="defense-auto-drill" checked> 无进行中攻击时，自动启动攻防联调（随机攻击）</label>
         </div>
         <button class="btn btn-primary" id="btn-defense">一键防御</button>
       </div>
@@ -91,16 +131,22 @@
         <div id="defense-result" class="result-box"></div>
       </div>
 
+      <div class="card" id="defense-drill-status-card" style="display:none">
+        <h2>攻防联调状态</h2>
+        <div class="status-bar"><div class="status-fill" id="defense-drill-progress"></div></div>
+        <p id="defense-drill-status-text">等待中...</p>
+        <div id="defense-drill-result" class="result-box"></div>
+      </div>
+
       <div class="card">
         <h2>最近防御报告</h2>
         <ul id="defense-report-list" class="report-list"></ul>
       </div>
     </section>
 
-    <!-- 第三页：配置 -->
     <section id="page-config" class="page">
       <h1>IP 与扫描配置</h1>
-      <p class="desc">配置本机 IP、C 段网段及默认扫描目标。保存后攻击/防御/性能测试均会使用。</p>
+      <p class="desc">保存后刷新或切换页面，攻击/防御的目标下拉会自动同步。请先「检测并应用」或手动填写本机 IP。</p>
 
       <div class="card">
         <div class="btn-group" style="margin-bottom:16px">
@@ -109,24 +155,28 @@
         </div>
         <div class="form-grid">
           <div class="form-row">
-            <label>本机 IP</label>
-            <input type="text" id="cfg-local-ip" placeholder="192.168.61.128">
+            <label>本机 IP（防御主机）</label>
+            <input type="text" id="cfg-local-ip" placeholder="自动检测">
           </div>
           <div class="form-row">
             <label>C 段网段</label>
-            <input type="text" id="cfg-cidr" placeholder="192.168.61.0/24">
+            <input type="text" id="cfg-cidr" placeholder="自动检测">
           </div>
           <div class="form-row">
             <label>网关</label>
-            <input type="text" id="cfg-gateway" placeholder="192.168.61.2">
+            <input type="text" id="cfg-gateway" placeholder="">
           </div>
           <div class="form-row">
             <label>网卡</label>
-            <input type="text" id="cfg-interface" placeholder="ens33">
+            <input type="text" id="cfg-interface" placeholder="">
           </div>
           <div class="form-row">
-            <label>默认攻击目标</label>
-            <input type="text" id="cfg-attack-target" placeholder="127.0.0.1">
+            <label>默认攻击目标 IP</label>
+            <input type="text" id="cfg-attack-target" placeholder="127.0.0.1 或本机 IP">
+          </div>
+          <div class="form-row">
+            <label>攻防联调默认目标</label>
+            <input type="text" id="cfg-defense-attack-target" placeholder="默认同本机 IP">
           </div>
           <div class="form-row">
             <label>攻击端口</label>
@@ -134,7 +184,7 @@
           </div>
           <div class="form-row">
             <label>性能测试 C 段</label>
-            <input type="text" id="cfg-perf-target" placeholder="192.168.61.0/24">
+            <input type="text" id="cfg-perf-target" placeholder="自动检测">
           </div>
           <div class="form-row">
             <label>性能测试端口</label>
@@ -148,12 +198,12 @@
       <div class="card">
         <h2>如何查看网段</h2>
         <pre class="code-block">ip addr | grep "inet "
-# 示例: inet 192.168.61.128/24 → C 段写 192.168.61.0/24</pre>
+# 示例: inet 192.168.x.x/24 → C 段写 192.168.x.0/24</pre>
       </div>
     </section>
   </main>
 
-  <footer class="footer">InsightScan · 运行在 Ubuntu VM · 报告目录 reports/</footer>
+  <footer class="footer">InsightScan · 报告目录 reports/</footer>
   <script src="/static/js/main.js"></script>
 </body>
 </html>

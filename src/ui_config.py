@@ -12,17 +12,34 @@ from src.utils import CONFIG_DIR, load_settings, setup_logging
 UI_SETTINGS_FILE = CONFIG_DIR / "ui_settings.json"
 
 DEFAULT_UI_SETTINGS = {
-    "local_ip": "127.0.0.1",
-    "cidr": "127.0.0.1/32",
+    "local_ip": "",
+    "cidr": "",
     "gateway": "",
     "interface": "",
     "attack_target": "127.0.0.1",
+    "defense_attack_target": "",
+    "target_mode": "127.0.0.1",
+    "target_custom": "",
     "attack_ports": "22,80,443",
-    "perf_target": "192.168.61.0/24",
+    "perf_target": "",
     "perf_ports": "22,80,443",
     "defense_duration": 60,
     "defense_apply_iptables": False,
 }
+
+
+def resolve_target(cfg: dict[str, Any], mode: str | None = None, custom: str | None = None) -> str:
+    """根据配置或 UI 选项解析实际扫描目标 IP/CIDR。"""
+    m = mode or cfg.get("target_mode") or "127.0.0.1"
+    if m == "127.0.0.1":
+        return "127.0.0.1"
+    if m == "local_ip":
+        return cfg.get("local_ip") or cfg.get("attack_target") or "127.0.0.1"
+    if m == "cidr":
+        return cfg.get("cidr") or cfg.get("perf_target") or cfg.get("attack_target") or "127.0.0.1"
+    if m == "custom":
+        return (custom or cfg.get("target_custom") or cfg.get("attack_target") or "").strip() or "127.0.0.1"
+    return cfg.get("attack_target") or "127.0.0.1"
 
 
 def load_ui_settings() -> dict[str, Any]:

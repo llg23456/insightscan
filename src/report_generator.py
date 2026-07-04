@@ -16,6 +16,7 @@ if str(_ROOT) not in sys.path:
 from src.scan_engine import SCAN_TYPE_MAP
 from src.utils import (
     REPORTS_DIR,
+    format_display_time,
     get_db_connection,
     get_setting,
     load_settings,
@@ -60,6 +61,7 @@ class ReportGenerator:
         output_path: Optional[str] = None,
         session_dir: Optional[Path] = None,
         scan_duration: Optional[float] = None,
+        ai_stats: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
         """
         生成扫描报告。
@@ -80,7 +82,7 @@ class ReportGenerator:
             if "error" in data:
                 return data
 
-            md_content = self._render_markdown(data)
+            md_content = self._render_markdown(data, ai_stats=ai_stats)
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             target_safe = data["target"].replace("/", "_").replace(":", "_")
 
@@ -167,8 +169,8 @@ class ReportGenerator:
                 "task_id": task_id,
                 "target": task["target"],
                 "scan_type": task["scan_type"],
-                "start_time": task["start_time"],
-                "end_time": task["end_time"],
+                "start_time": format_display_time(task["start_time"]),
+                "end_time": format_display_time(task["end_time"], assume_utc_if_naive=False),
                 "status": task["status"],
                 "total_hosts": task["total_hosts"],
                 "total_ports": task["total_ports"],
@@ -201,7 +203,9 @@ class ReportGenerator:
             return "0.0"
         return f"{count / total * 100:.1f}"
 
-    def _render_markdown(self, data: dict[str, Any]) -> str:
+    def _render_markdown(
+        self, data: dict[str, Any], ai_stats: Optional[dict[str, Any]] = None
+    ) -> str:
         """渲染 Markdown 报告正文。"""
         results = data["results"]
         counts = self._count_risks(results)
@@ -212,7 +216,8 @@ class ReportGenerator:
             "",
             "## 1. 扫描概览",
             "",
-            f"- 扫描时间: {data['start_time']}",
+            f"- 扫描时间: {data['start_time']}（本地时间）",
+            f"- 结束时间: {data.get('end_time') or '—'}",
             f"- 扫描目标: {data['target']}",
             f"- 扫描类型: {data['scan_type']}",
             f"- 任务 ID: {data['task_id']}",
@@ -221,6 +226,21 @@ class ReportGenerator:
             f"- 扫描耗时: {data['duration']}秒",
             f"- 任务状态: {data['status']}",
         ]
+        if ai_stats:
+            lines.extend([
+                "",
+                "### AI 分析来源",
+                "",
+                f"- 分析端口数: {ai_stats.get('total_ports', 0)}",
+                f"- Kimi API 调用: {ai_stats.get('api_calls', 0)} 次",
+                f"- 缓存命中: {ai_stats.get('cache_hits', 0)} 次",
+                f"- 本地规则降级: {ai_stats.get('local_rules', 0)} 次",
+                f"- API Key 配置: `{ai_stats.get('api_key_status', '未知')}`",
+            ])
+            if ai_stats.get("cache_hits", 0) > 0 and ai_stats.get("api_calls", 0) == 0:
+                lines.append(
+                    "- 说明: 相同服务/版本已写入 `data/ai_cache.json`，未重复调用 Kimi API"
+                )
         if data["total_hosts"] == 0 and data["total_ports"] == 0:
             lines.extend([
                 "",

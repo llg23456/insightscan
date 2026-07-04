@@ -6,6 +6,7 @@ import logging
 import os
 import re
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -74,6 +75,31 @@ def _ensure_dirs() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def now_local_str() -> str:
+    """返回本地时间字符串，用于写入数据库与报告。"""
+    return datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def format_display_time(value: Any, assume_utc_if_naive: bool = True) -> str:
+    """
+    将数据库/日志时间格式化为本地可读时间。
+
+    旧版 start_time 由 SQLite UTC 默认值写入，读取时需转换。
+    """
+    if not value:
+        return "未知"
+    text = str(value).replace("T", " ")[:19]
+    try:
+        dt = datetime.fromisoformat(text)
+    except ValueError:
+        return text
+    if dt.tzinfo is None and assume_utc_if_naive:
+        dt = dt.replace(tzinfo=timezone.utc).astimezone()
+    elif dt.tzinfo is not None:
+        dt = dt.astimezone()
+    return dt.strftime("%Y-%m-%d %H:%M:%S")
 
 
 def setup_logging(level: int = logging.INFO) -> logging.Logger:

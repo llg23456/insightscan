@@ -13,8 +13,9 @@ from src.security_tools import IptablesDefense, PromiscModeDetector, ScanBehavio
 class TestScanBehaviorDetector(unittest.TestCase):
     """扫描行为检测测试。"""
 
+    @patch.object(ScanBehaviorDetector, "_detect_from_scan_database", return_value=[])
     @patch.object(ScanBehaviorDetector, "_collect_log_lines")
-    def test_detect_nmap_scan(self, mock_lines) -> None:
+    def test_detect_nmap_scan(self, mock_lines, _mock_db) -> None:
         mock_lines.return_value = [
             "Jul  4 10:00:00 host kernel: Nmap scan detected SRC=192.168.1.100",
             "Jul  4 10:00:01 host ufw: [UFW BLOCK] IN=ens33 SRC=10.0.0.5 DST=192.168.1.1",
