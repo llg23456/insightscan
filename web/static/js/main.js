@@ -29,6 +29,10 @@ function switchPage(page) {
     applyAllTargetSelectors();
   }
   if (page === "defense") refreshRuntimeStatus();
+  if (page === "nmap-lab") {
+    loadNmapComparison();
+    loadReportList("nmap_lab");
+  }
 }
 
 async function api(url, options = {}) {
@@ -311,6 +315,16 @@ function reportLink(dir, file) {
   return `/reports/${name}/${file}`;
 }
 
+/** 从 Nmap 实验结果解析 Web 可访问的报告目录（含 nmap_lab/ 前缀） */
+function nmapLabReportBase(r) {
+  if (r.report_web_path) return r.report_web_path;
+  const dir = (r.session_dir || "").replace(/\\/g, "/");
+  const idx = dir.indexOf("nmap_lab/");
+  if (idx >= 0) return dir.slice(idx);
+  const folder = dir.split("/").filter(Boolean).pop() || "";
+  return folder ? `nmap_lab/${folder}` : "";
+}
+
 function renderSuiteSummary(r) {
   if (!r.attack_suite?.length) return "";
   let html = "<p><strong>攻击套件:</strong></p><ul>";
@@ -522,6 +536,20 @@ document.getElementById("btn-defense").addEventListener("click", async () => {
 
 async function loadReportList(mode) {
   const data = await api(`/api/reports?mode=${mode}`);
+  if (mode === "nmap_lab") {
+    const ul = document.getElementById("nmap-report-list");
+    if (!ul) return;
+    ul.innerHTML = "";
+    (data.reports || []).forEach((r) => {
+      const li = document.createElement("li");
+      li.innerHTML = `<a href="/reports/${r.name}/scan.html" target="_blank">${r.name}/scan.html</a>`;
+      ul.appendChild(li);
+    });
+    if (!ul.children.length) {
+      ul.innerHTML = "<li class='hint'>暂无 Nmap 实验输出</li>";
+    }
+    return;
+  }
   const listId = mode === "attack" ? "attack-report-list" : "defense-report-list";
   const ul = document.getElementById(listId);
   ul.innerHTML = "";
@@ -540,3 +568,295 @@ loadConfig();
 loadReportList("attack");
 loadReportList("defense");
 statusTimer = setInterval(refreshRuntimeStatus, 5000);
+
+// ---------- Nmap 扫描与对比教学 ----------
+let nmapPollTimer = null;
+
+function nmapTarget() {
+  return document.getElementById("nmap-target").value.trim() || "127.0.0.1";
+}
+
+function nmapPorts() {
+  return document.getElementById("nmap-ports").value.trim() || "21,23,80,3306";
+}
+
+function stopNmapPoll() {
+  if (nmapPollTimer) {
+    clearInterval(nmapPollTimer);
+    nmapPollTimer = null;
+  }
+}
+
+function renderZenmapPanels(hosts, target) {
+  const host = (hosts && hosts[0]) || { ip: target, state: "unknown", ports: [] };
+  const stateIcon = host.state === "up" ? "🟢" : "🔴";
+  const osLine = host.os_name
+    ? `<div>OS: ${host.os_name}${host.os_accuracy ? ` (${host.os_accuracy}%)` : ""}</div>`
+    : "<div>OS: 未知</div>";
+
+  let portHtml = "";
+  const openPorts = (host.ports || []).filter(
+    (p) => p.state === "open" || p.state === "open|filtered"
+  );
+  if (openPorts.length) {
+    openPorts.forEach((p) => {
+      const detail = [p.product, p.version].filter(Boolean).join(" ") || "-";
+      portHtml += `<div class="zenmap-port-row">${p.port}/${p.protocol || "tcp"} ${p.state} ${p.service || "-"} ${detail}</div>`;
+    });
+  } else {
+    portHtml = "<div class='hint'>未发现开放端口</div>";
+  }
+
+  let svcHtml = "";
+  (host.services || []).forEach((s) => {
+    svcHtml += `<div>📦 ${s.product || "未知"} v${s.version || "?"} @ ${s.port}${s.extra ? ` (${s.extra})` : ""}</div>`;
+  });
+
+  return `
+    <div class="zenmap-layout">
+      <div class="zenmap-panel">
+        <h3>🖥️ 主机列表面板</h3>
+        <div class="zenmap-host-row">${stateIcon} <strong>${host.ip}</strong></div>
+        <div>状态: ${host.state}</div>
+        ${osLine}
+      </div>
+      <div class="zenmap-panel">
+        <h3>🔌 端口 / 服务标签</h3>
+        ${portHtml}
+      </div>
+    </div>
+    ${svcHtml ? `<div class="zenmap-panel" style="margin-top:12px"><h3>📦 服务标签</h3>${svcHtml}</div>` : ""}
+  `;
+}
+
+function renderNmapResult(job) {
+  const r = job.result || {};
+  const box = document.getElementById("nmap-result-box");
+  let html = "";
+
+  if (r.hint) {
+    html += `<div class="alert-hint">${r.hint}</div>`;
+  }
+  if (r.error && !r.hosts) {
+    html += `<p class="status-err">${r.error}</p>`;
+    box.innerHTML = html;
+    return;
+  }
+  if (r.error && r.success === false) {
+    html += `<p class="status-err">${r.error}</p>`;
+  }
+
+  html += `<div class="nmap-meta">`;
+  html += `<p>🎯 目标: <strong>${r.target || "—"}</strong>`;
+  if (r.ports) html += ` · 端口: ${r.ports}`;
+  if (r.duration != null) html += ` · ⏱️ ${r.duration}s`;
+  html += `</p>`;
+  if (r.nmap_command) html += `<p>💻 命令: <code>${r.nmap_command}</code></p>`;
+  if (r.principle) html += `<p>📖 原理: ${r.principle}</p>`;
+  if (r.features) html += `<p>✨ 特点: ${r.features}</p>`;
+  html += `</div>`;
+
+  if (r.mode === "zenmap" || (r.hosts && r.hosts.length)) {
+    html += renderZenmapPanels(r.hosts, r.target);
+  }
+
+  if (r.mode === "os") {
+    const matches = r.os_matches || [];
+    if (matches.length) {
+      html += "<p><strong>识别结果:</strong></p><ul>";
+      matches.forEach((m) => {
+        html += `<li>${m.name} — 置信度 ${m.accuracy}%</li>`;
+      });
+      html += "</ul>";
+    } else if (r.no_result_hint) {
+      html += `<p class="hint">${r.no_result_hint}</p>`;
+    }
+  }
+
+  if (r.mode === "full_port" || r.open_port_count != null) {
+    html += `<p><strong>开放端口数:</strong> ${r.open_port_count ?? 0}</p>`;
+    const lst = r.open_port_list || [];
+    if (lst.length) {
+      html += `<p><strong>列表:</strong> ${lst.slice(0, 30).join(", ")}${lst.length > 30 ? " ..." : ""}</p>`;
+    }
+  } else if (r.open_port_count != null && r.mode !== "zenmap") {
+    html += `<p><strong>开放端口:</strong> ${r.open_port_count}</p>`;
+  }
+
+  const base = nmapLabReportBase(r);
+  if (base) {
+    html += `<p>📄 报告: <a href="/reports/${base}/scan.html" target="_blank">浏览器查看 scan.html</a>`;
+    html += ` · <a href="/reports/${base}/scan.xml" download>下载 scan.xml</a></p>`;
+    html += `<p class="hint">scan.html 为可读报告；scan.xml 供 Zenmap 导入。</p>`;
+  }
+
+  if (r.comparison && r.comparison.summary) {
+    html += `<p class="hint" style="margin-top:12px">💡 ${r.comparison.summary}</p>`;
+  }
+
+  box.innerHTML = html;
+  loadReportList("nmap_lab");
+}
+
+function pollNmapJob(jobId, title) {
+  stopNmapPoll();
+  const card = document.getElementById("nmap-result-card");
+  card.style.display = "block";
+  document.getElementById("nmap-result-title").textContent = title;
+  document.getElementById("nmap-progress").style.width = "30%";
+  document.getElementById("nmap-status-text").textContent = "加载中，正在扫描...";
+  document.getElementById("nmap-status-text").className = "";
+  document.getElementById("nmap-result-box").innerHTML = "";
+
+  nmapPollTimer = setInterval(async () => {
+    const job = await api(`/api/job/${jobId}`);
+    document.getElementById("nmap-status-text").textContent = job.progress || job.status;
+    if (job.status === "running") {
+      document.getElementById("nmap-progress").style.width = "60%";
+    }
+    if (job.status === "done") {
+      stopNmapPoll();
+      document.getElementById("nmap-progress").style.width = "100%";
+      document.getElementById("nmap-status-text").textContent = "完成";
+      document.getElementById("nmap-status-text").className = "status-ok";
+      renderNmapResult(job);
+    }
+    if (job.status === "error") {
+      stopNmapPoll();
+      document.getElementById("nmap-progress").style.width = "100%";
+      document.getElementById("nmap-status-text").textContent = "失败";
+      document.getElementById("nmap-status-text").className = "status-err";
+      document.getElementById("nmap-result-box").innerHTML =
+        `<p class="status-err">${job.error || "未知错误"}</p>`;
+    }
+  }, 1500);
+}
+
+async function runNmapDemo(mode, title, btnId) {
+  const btn = document.getElementById(btnId);
+  if (btn) btn.disabled = true;
+  const data = await api(`/api/nmap-lab/${mode}`, {
+    method: "POST",
+    body: JSON.stringify({ target: nmapTarget(), ports: nmapPorts() }),
+  });
+  if (btn) btn.disabled = false;
+  if (data.job_id) {
+    pollNmapJob(data.job_id, title);
+  }
+}
+
+async function loadNmapComparison() {
+  const data = await api("/api/nmap-lab/comparison");
+  if (!data.success) return;
+
+  const priv = data.privileges || {};
+  const okAlert = document.getElementById("nmap-privilege-alert");
+  const warnAlert = document.getElementById("nmap-privilege-warn");
+  if (priv.can_syn_os) {
+    okAlert.style.display = "block";
+    okAlert.innerHTML = `<strong>✅ SYN/OS 可用</strong> — ${priv.message || ""}`;
+    warnAlert.style.display = "none";
+  } else if (priv.setup_hint) {
+    warnAlert.style.display = "block";
+    warnAlert.innerHTML =
+      `<strong>SYN / OS 需额外配置</strong><pre class="code-block" style="margin-top:8px;white-space:pre-wrap">${priv.setup_hint}</pre>`;
+    okAlert.style.display = "none";
+  }
+
+  const compEl = document.getElementById("nmap-static-comparison");
+  const c = data.comparison || {};
+  let compHtml = "";
+  ["zenmap", "insightscan"].forEach((key) => {
+    const block = c[key] || {};
+    compHtml += `<div class="comparison-col"><h3>${block.title || key}</h3><ul>`;
+    (block.points || []).forEach((pt) => {
+      compHtml += `<li>${pt}</li>`;
+    });
+    compHtml += "</ul></div>";
+  });
+  compEl.innerHTML = compHtml;
+  const summaryEl = document.getElementById("nmap-comparison-summary");
+  if (summaryEl) summaryEl.textContent = c.summary || "";
+
+  const tableEl = document.getElementById("nmap-scan-table");
+  const rows = data.table || [];
+  let tbl = `<table class="scan-table"><thead><tr>
+    <th>扫描方式</th><th>权限</th><th>速度</th><th>隐蔽性</th><th>准确性</th>
+  </tr></thead><tbody>`;
+  rows.forEach((row) => {
+    tbl += `<tr><td>${row.method}</td><td>${row.privilege}</td><td>${row.speed}</td><td>${row.stealth}</td><td>${row.accuracy}</td></tr>`;
+  });
+  tbl += "</tbody></table>";
+  tableEl.innerHTML = tbl;
+
+  document.getElementById("nmap-lab-questions").textContent =
+    "实验思考：① 局域网扫描延迟低、结果更完整；互联网目标常 filtered。② 防御：关闭非必要端口、防火墙白名单、启用 syslog/IDS 监控扫描行为。";
+}
+
+document.getElementById("btn-nmap-zenmap").addEventListener("click", () =>
+  runNmapDemo("zenmap", "Zenmap 风格演示", "btn-nmap-zenmap")
+);
+document.getElementById("btn-nmap-connect").addEventListener("click", () =>
+  runNmapDemo("connect", "TCP Connect (-sT)", "btn-nmap-connect")
+);
+document.getElementById("btn-nmap-syn").addEventListener("click", () =>
+  runNmapDemo("syn", "TCP SYN (-sS)", "btn-nmap-syn")
+);
+document.getElementById("btn-nmap-os").addEventListener("click", () =>
+  runNmapDemo("os", "操作系统识别 (-O)", "btn-nmap-os")
+);
+document.getElementById("btn-nmap-full").addEventListener("click", () =>
+  runNmapDemo("full_port", "全端口扫描 (1-1000)", "btn-nmap-full")
+);
+
+document.getElementById("btn-nmap-insightscan").addEventListener("click", async () => {
+  const btn = document.getElementById("btn-nmap-insightscan");
+  btn.disabled = true;
+  const target = nmapTarget();
+  const ports = nmapPorts();
+  const resultBox = document.getElementById("nmap-insightscan-result");
+  resultBox.style.display = "block";
+  resultBox.innerHTML = "<p>⏳ 正在启动 InsightScan Connect 扫描 + AI 分析...</p>";
+
+  const data = await api("/api/attack", {
+    method: "POST",
+    body: JSON.stringify({
+      target,
+      ports,
+      perf: false,
+      full_suite: false,
+      with_defense: false,
+    }),
+  });
+  btn.disabled = false;
+
+  if (!data.job_id) {
+    resultBox.innerHTML = `<p class="status-err">${data.error || "启动失败"}</p>`;
+    return;
+  }
+
+  const pollIs = setInterval(async () => {
+    const job = await api(`/api/job/${data.job_id}`);
+    if (job.status === "running") {
+      resultBox.innerHTML = `<p>⏳ ${job.progress || "分析中..."}</p>`;
+    }
+    if (job.status === "done") {
+      clearInterval(pollIs);
+      const r = job.result || {};
+      const dir = r.session_dir || "";
+      let html = `<p class="status-ok">✅ InsightScan 增强分析完成</p>`;
+      html += `<p>目标: ${r.target} · 端口: ${r.ports}</p>`;
+      if (r.reports?.html) {
+        html += `<p><a href="${reportLink(dir, "attack_report.html")}" target="_blank">打开 AI 增强 HTML 报告</a></p>`;
+      }
+      html += `<p class="hint">对比上方 Zenmap 原始输出：InsightScan 增加了 AI 风险解读、批量能力与自动化报告。</p>`;
+      html += `<p><button class="btn btn-secondary" type="button" id="btn-goto-attack">查看主动探测页</button></p>`;
+      resultBox.innerHTML = html;
+      document.getElementById("btn-goto-attack").addEventListener("click", () => switchPage("attack"));
+    }
+    if (job.status === "error") {
+      clearInterval(pollIs);
+      resultBox.innerHTML = `<p class="status-err">失败: ${job.error || "未知错误"}</p>`;
+    }
+  }, 2000);
+});

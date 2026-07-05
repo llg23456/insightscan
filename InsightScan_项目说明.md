@@ -13,7 +13,7 @@
 |------|------|
 | **攻击方（主动探测）** | Nmap 多类型扫描 → Kimi AI 风险评估 → 报告与可视化 |
 | **防御方（被动防御）** | 被扫描检测、混杂模式检测、iptables 规则自动生成 |
-| **实验平台** | 多线程性能对比、协议分析、Web 一键攻防联调 |
+| **实验平台** | 多线程性能对比、协议分析、Web 一键攻防联调、**Nmap 扫描教学** |
 
 **技术栈**：Python 3.10 · Nmap · SQLite · Kimi API（OpenAI SDK）· Flask · matplotlib · psutil
 
@@ -28,6 +28,7 @@ flowchart TB
     subgraph 入口层
         CLI[main.py CLI]
         WEB[run_web.py + Flask]
+        LAB[nmap_lab 教学模块]
     end
 
     subgraph 业务层
@@ -54,11 +55,12 @@ flowchart TB
     subgraph 存储
         DB[(data/scan_results.db)]
         CACHE[data/ai_cache.json]
-        REPORTS[reports/attack_* defense_*]
+        REPORTS[reports/attack_* defense_* nmap_lab/]
     end
 
     CLI --> ATK & DEF
-    WEB --> ATK & DEF
+    WEB --> ATK & DEF & LAB
+    LAB --> REPORTS
     ATK --> SCAN & AI & RPT & VIS & PROTO & PERF
     DEF --> SEC & SCAN & VIS
     SCAN & AI & RPT --> UTIL
@@ -145,6 +147,32 @@ sequenceDiagram
 
 **无需两个终端**：攻击与防御在同一 Flask 进程内并行，时间重叠，便于实验演示。
 
+### 3.4 Nmap 扫描与对比教学（第四 Tab）
+
+```mermaid
+sequenceDiagram
+    participant B as 浏览器
+    participant F as Flask /api/nmap-lab
+    participant R as nmap_runner
+    participant N as nmap / sudo nmap
+
+    B->>F: POST /api/nmap-lab/{zenmap|connect|syn|os|full_port}
+    F->>R: 后台线程 execute_nmap_scan
+    alt Connect / Zenmap / 全端口
+        R->>N: python-nmap 直接调用
+    else SYN / OS（需 root）
+        R->>N: sudo -n nmap -oX -
+    end
+    R->>R: 保存 scan.xml + scan.html
+    F-->>B: 轮询 /api/job/{id} → 双栏结果 + 报告链接
+```
+
+**与主引擎关系**：`nmap_lab/` **独立于** `scan_engine.py`，不入 SQLite，专用于实验指导书演示。
+
+**SYN/OS 权限**：VM 配置 `sudo NOPASSWD: /usr/bin/nmap` 后，Web 仍用普通用户 `python3 run_web.py` 启动。详见 [README.md](README.md#nmap-教学与-synos-权限配置)。
+
+**Zenmap vs InsightScan**：页内静态对比 + 可选「InsightScan 增强分析」（走主动探测 Connect + Kimi AI）。
+
 ---
 
 ## 四、项目亮点与对应文件
@@ -158,11 +186,12 @@ sequenceDiagram
 | 5 | **数据库联动防御** | Connect 扫描也能被防御侧检测到 | `src/security_tools.py` `_detect_from_scan_database()` |
 | 6 | **性能实验** | 10/50/100 线程 + CPU/内存采样 | `src/perf_benchmark.py` |
 | 7 | **协议分析** | TCP/HTTP/FTP 字段标注图 + tshark 抓包 | `src/protocol_analyzer.py` |
-| 8 | **Web 三页控制台** | 攻击 / 防御 / IP 配置，一键联调 | `web/app.py`, `web/templates/index.html`, `web/static/js/main.js` |
-| 9 | **动态 IP 配置** | 自动检测网段，保存后各页同步 | `src/ui_config.py`, `config/ui_settings.json` |
-| 10 | **攻击随机化** | 联调时随机 1~3 种扫描，全套攻击含三种类型 | `src/attack_mode.py` `run_attack_suite()` |
-| 11 | **可复现实验数据** | 每次会话独立目录 + summary.json | `src/session_paths.py`, `reports/` |
-| 12 | **单元测试** | 扫描/AI/报告/安全模块测试 | `tests/` |
+| 8 | **Web 四页控制台** | 攻击 / 防御 / IP 配置 / Nmap 教学 | `web/app.py`, `web/templates/index.html` |
+| 9 | **Nmap 扫描教学** | Zenmap 双栏、四种扫描对比、HTML/XML 报告、sudo nmap | `nmap_lab/` |
+| 10 | **动态 IP 配置** | 自动检测网段，保存后各页同步 | `src/ui_config.py` |
+| 11 | **攻击随机化** | 联调时随机 1~3 种扫描 | `src/attack_mode.py` |
+| 12 | **可复现实验数据** | 会话独立目录 + summary.json | `src/session_paths.py`, `reports/` |
+| 13 | **单元测试** | 扫描/AI/报告/安全模块 | `tests/` |
 
 ---
 
@@ -175,6 +204,15 @@ insightscan/
 ├── run_web.py                      # Web 入口：启动 Flask 控制台（端口 8080）
 ├── requirements.txt                # Python 依赖清单
 ├── .gitignore                      # 忽略密钥、报告、数据库、venv
+│
+├── nmap_lab/                       # Nmap 教学（独立，不入 scan_engine DB）
+│   ├── common.py                   # 路径、XML/HTML 保存、权限检测、对比表
+│   ├── nmap_runner.py              # 普通扫描 + sudo -n nmap（SYN/OS）
+│   ├── zenmap_demo.py              # Zenmap 风格 CLI
+│   └── scan_types_demo.py          # Connect/SYN/OS/全端口对比 CLI
+│
+├── scripts/
+│   └── setup_nmap_sudoers.sh       # 配置 sudo 免密 nmap（可选）
 │
 ├── config/
 │   ├── settings.json               # 全局：扫描线程、AI 模型、安全策略、perf C 段
@@ -197,8 +235,8 @@ insightscan/
 │   └── session_paths.py            # 创建 reports/attack_* 与 defense_* 会话目录
 │
 ├── web/
-│   ├── app.py                      # Flask 路由：/api/attack /api/defense /api/drill /api/config
-│   ├── templates/index.html        # 三 Tab 页面：主动探测、被动防御、IP 配置
+│   ├── app.py                      # Flask 路由：/api/attack /api/defense /api/drill /api/nmap-lab/*
+│   ├── templates/index.html        # 四 Tab：主动探测、被动防御、IP 配置、Nmap 教学
 │   └── static/
 │       ├── css/style.css           # 深色主题 UI
 │       └── js/main.js              # 前端逻辑：目标选择、任务轮询、配置同步
@@ -210,7 +248,8 @@ insightscan/
 │
 ├── reports/                        # 实验报告输出（gitignore）
 │   ├── attack_YYYYMMDD_HHMMSS/     # 攻击会话：报告、截图、summary、perf（可选）
-│   └── defense_YYYYMMDD_HHMMSS/    # 防御会话：报告、iptables 脚本、事件 JSON
+│   ├── defense_YYYYMMDD_HHMMSS/    # 防御会话：报告、iptables 脚本、事件 JSON
+│   └── nmap_lab/                   # Nmap 教学：scan.html + scan.xml
 │
 ├── tests/                          # 单元测试
 │   ├── test_utils.py
@@ -259,9 +298,10 @@ attack_mode.py
 
 | 实验编号 | 内容 | 命令 / 操作 | 产出 |
 |---------|------|------------|------|
-| EXP-01 | Connect 扫描 | `main.py -t 目标 --scan-type connect` | DB + 报告 |
-| EXP-02 | SYN 扫描 | `sudo main.py --scan-type syn` | 需 root |
+| EXP-01 | Connect 扫描 | `main.py -t 目标 --scan-type connect` 或 Web/CLI `nmap_lab` | DB + 报告 / XML |
+| EXP-02 | SYN 扫描 | Web Nmap Tab / `nmap_lab`（需 sudo 免密 nmap） | scan.html + scan.xml |
 | EXP-03 | FIN 扫描 | `sudo main.py --scan-type fin` | 需 root |
+| EXP-03+ | Zenmap / 扫描对比 | Web「Nmap扫描与对比教学」/ CLI `nmap_lab/` | reports/nmap_lab/ |
 | EXP-04 | 多线程性能 | `main.py --attack -t C段 --perf` | perf_benchmark.md |
 | EXP-05 | 协议分析 | 攻击模式自动生成 | protocol_*.png, capture.pcap |
 | 攻防联调 | 攻击+防御重叠 | Web「一键攻防联调」 | attack_* + defense_* |
@@ -279,18 +319,19 @@ attack_mode.py
 | 被动防御 | 一键攻防联调 | 同上（可自选目标） |
 | 被动防御 | 一键防御 | 接续进行中攻击，或自动联调 |
 | IP 配置 | 检测并应用 | `ip addr` 自动填本机 IP / C 段，各页同步 |
+| Nmap扫描与对比教学 | Zenmap / Connect / SYN / OS / 全端口 | 独立按钮；SYN/OS 需 sudo 免密 nmap；输出 scan.html |
 
-启动：`python3 run_web.py` → 浏览器 `http://<VM_IP>:8080`
+启动：`python3 run_web.py`（**普通用户**）→ `http://<VM_IP>:8080`
 
 ---
 
 ## 九、答辩时可强调的「完成了什么」
 
-1. **完整闭环**：扫描 → 分析 → 报告 → 存储 → 可视化，不是单纯调 Nmap。  
-2. **AI 落地**：Kimi 对开放端口做风险分级，有缓存与降级，报告标明 API/缓存/本地规则来源。  
-3. **攻防实验可演示**：Web 单页联调，防御能通过数据库发现 Connect 扫描。  
-4. **工程化**：配置分离、会话目录、单元测试、gitignore 密钥、文档齐全。  
-5. **可扩展**：模块化 `src/`，CLI 与 Web 共用同一套业务逻辑。
+1. **完整闭环**：扫描 → 分析 → 报告 → 存储 → 可视化。  
+2. **AI 落地**：Kimi 风险分级 + 缓存降级 + 来源标注。  
+3. **攻防实验**：Web 单页联调 + DB 联动防御。  
+4. **Nmap 教学**：第四 Tab 模拟 Zenmap，对比 Connect/SYN/OS/全端口，与 InsightScan AI 增强对照。  
+5. **工程化**：模块化、文档齐全、密钥 gitignore。
 
 ---
 

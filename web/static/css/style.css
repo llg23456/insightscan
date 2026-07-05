@@ -272,3 +272,127 @@ body {
 
 .status-ok { color: var(--ok); }
 .status-err { color: var(--accent); }
+
+/* Nmap 教学页：Zenmap 双栏布局 */
+.zenmap-layout {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+@media (max-width: 600px) {
+  .zenmap-layout { grid-template-columns: 1fr; }
+}
+
+.zenmap-panel {
+  background: #0f0f1a;
+  border: 1px solid #333;
+  border-radius: 6px;
+  padding: 12px;
+  font-size: 0.88rem;
+}
+
+.zenmap-panel h3 {
+  font-size: 0.95rem;
+  color: var(--primary);
+  margin-bottom: 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #333;
+}
+
+.zenmap-host-row {
+  padding: 6px 0;
+  border-bottom: 1px solid #222;
+}
+
+.zenmap-port-row {
+  font-family: ui-monospace, monospace;
+  font-size: 0.82rem;
+  padding: 4px 0;
+}
+
+.comparison-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+@media (max-width: 600px) {
+  .comparison-grid { grid-template-columns: 1fr; }
+}
+
+.comparison-col {
+  background: #0f0f1a;
+  border-radius: 6px;
+  padding: 14px;
+  border: 1px solid #333;
+}
+
+.comparison-col h3 {
+  color: var(--primary);
+  font-size: 0.95rem;
+  margin-bottom: 10px;
+}
+
+.comparison-col ul {
+  list-style: none;
+  font-size: 0.88rem;
+  color: var(--muted);
+}
+
+.comparison-col li::before {
+  content: "• ";
+  color: var(--ok);
+}
+
+.scan-table-wrap {
+  overflow-x: auto;
+}
+
+.scan-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.scan-table th,
+.scan-table td {
+  padding: 8px 10px;
+  border: 1px solid #333;
+  text-align: left;
+}
+
+.scan-table th {
+  background: #0f0f1a;
+  color: var(--primary);
+}
+
+.lab-questions {
+  margin-top: 16px;
+  white-space: pre-line;
+  line-height: 1.7;
+}
+
+.nmap-meta {
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin-bottom: 10px;
+}
+
+.nmap-meta code {
+  background: rgba(0,0,0,0.3);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 0.82rem;
+}
+
+.alert-hint {
+  background: rgba(245, 166, 35, 0.12);
+  border: 1px solid var(--warn);
+  color: #ffd699;
+  padding: 10px 14px;
+  border-radius: 6px;
+  margin: 10px 0;
+  font-size: 0.88rem;
+}

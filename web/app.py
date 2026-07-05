@@ -1,4 +1,4 @@
-"""InsightScan Web 服务：三页界面 API。"""
+"""InsightScan Web 服务：四页界面 API（含 Nmap 扫描与对比教学）。"""
 
 import sys
 import threading
@@ -311,9 +311,124 @@ def _run_drill_orchestrator(
         _update_job(drill_id, status="error", error=str(e), progress="联调异常")
 
 
+def _run_nmap_lab_job(job_id: str, mode: str, target: str, ports: str) -> None:
+    """后台执行 Nmap 教学演示任务。"""
+    log = setup_logging()
+    _set_active_status(job_id, "running")
+    labels = {
+        "zenmap": "Zenmap 风格演示",
+        "connect": "TCP Connect 扫描",
+        "syn": "TCP SYN 扫描",
+        "os": "操作系统识别",
+        "full_port": "全端口扫描 (1-1000)",
+    }
+    try:
+        _update_job(
+            job_id,
+            status="running",
+            progress=f"正在执行 {labels.get(mode, mode)} → {target} ...",
+        )
+        if mode == "zenmap":
+            from nmap_lab.zenmap_demo import run_zenmap_scan
+            result = run_zenmap_scan(target, ports)
+        elif mode == "connect":
+            from nmap_lab.scan_types_demo import demo_tcp_connect
+            result = demo_tcp_connect(target, ports)
+        elif mode == "syn":
+            from nmap_lab.scan_types_demo import demo_tcp_syn
+            result = demo_tcp_syn(target, ports)
+        elif mode == "os":
+            from nmap_lab.scan_types_demo import demo_os_detection
+            result = demo_os_detection(target)
+        elif mode == "full_port":
+            from nmap_lab.scan_types_demo import demo_full_port_scan
+            result = demo_full_port_scan(target)
+        else:
+            result = {"error": f"未知演示模式: {mode}"}
+
+        if result.get("error") and result.get("success") is not False:
+            _update_job(job_id, status="error", error=result["error"], progress="失败")
+            _set_active_status(job_id, "error")
+        elif result.get("success") is False and not result.get("hosts"):
+            _update_job(
+                job_id,
+                status="done",
+                progress="完成（权限或环境限制）",
+                result=result,
+            )
+            _set_active_status(job_id, "done")
+        else:
+            _update_job(
+                job_id,
+                status="done",
+                progress="完成",
+                result=result,
+            )
+            _set_active_status(job_id, "done")
+    except Exception as e:
+        log.error("Nmap 教学任务异常: %s", e)
+        _update_job(job_id, status="error", error=str(e), progress="异常")
+        _set_active_status(job_id, "error")
+
+
+def _start_nmap_lab_job(mode: str, target: str, ports: str) -> str:
+    """创建并启动 Nmap 教学后台任务。"""
+    job_id = _create_job(f"nmap_{mode}")
+    _register_active(job_id, f"nmap_{mode}", target=target, ports=ports, mode=mode)
+    thread = threading.Thread(
+        target=_run_nmap_lab_job,
+        args=(job_id, mode, target, ports),
+        daemon=True,
+    )
+    thread.start()
+    return job_id
+
+
+@app.route("/api/nmap-lab/<mode>", methods=["POST"])
+def api_nmap_lab(mode: str):
+    """Nmap 教学演示：zenmap / connect / syn / os / full_port。"""
+    allowed = {"zenmap", "connect", "syn", "os", "full_port"}
+    if mode not in allowed:
+        return jsonify({"error": f"不支持的模式: {mode}"}), 400
+
+    data = request.get_json(silent=True) or {}
+    target = (data.get("target") or "127.0.0.1").strip()
+    ports = (data.get("ports") or "21,23,80,3306").strip()
+
+    job_id = _start_nmap_lab_job(mode, target, ports)
+    labels = {
+        "zenmap": "Zenmap 演示",
+        "connect": "TCP Connect",
+        "syn": "TCP SYN",
+        "os": "OS 识别",
+        "full_port": "全端口扫描",
+    }
+    return jsonify({
+        "success": True,
+        "job_id": job_id,
+        "mode": mode,
+        "message": f"{labels.get(mode, mode)}已启动",
+        "target": target,
+        "ports": ports,
+    })
+
+
+@app.route("/api/nmap-lab/comparison", methods=["GET"])
+def api_nmap_lab_comparison():
+    """返回静态对比表与 InsightScan 差异说明。"""
+    from nmap_lab.common import comparison_table_rows, insightscan_comparison_static
+    from nmap_lab.common import get_privilege_status
+    return jsonify({
+        "success": True,
+        "table": comparison_table_rows(),
+        "comparison": insightscan_comparison_static(),
+        "privileges": get_privilege_status(),
+    })
+
+
 @app.route("/")
 def index():
-    """主页面（三 Tab）。"""
+    """主页面（四 Tab）。"""
     return render_template("index.html")
 
 
@@ -537,6 +652,17 @@ def api_list_reports():
     """列出最近报告目录。"""
     mode = request.args.get("mode", "all")
     reports = []
+
+    if mode == "nmap_lab":
+        nmap_lab_dir = REPORTS_DIR / "nmap_lab"
+        if nmap_lab_dir.exists():
+            for sub in sorted(nmap_lab_dir.iterdir(), reverse=True):
+                if sub.is_dir():
+                    reports.append({"name": f"nmap_lab/{sub.name}", "path": str(sub)})
+                if len(reports) >= 20:
+                    break
+        return jsonify({"reports": reports})
+
     if REPORTS_DIR.exists():
         for p in sorted(REPORTS_DIR.iterdir(), reverse=True):
             if not p.is_dir():
@@ -555,6 +681,20 @@ def api_list_reports():
 @app.route("/reports/<path:filepath>")
 def serve_report(filepath: str):
     """静态访问 reports 目录（查看 HTML/截图）。"""
+    full_path = REPORTS_DIR / filepath
+    if (
+        filepath.endswith("scan.html")
+        and not full_path.exists()
+        and "nmap_lab" in filepath
+    ):
+        xml_path = full_path.parent / "scan.xml"
+        if xml_path.exists():
+            from nmap_lab.common import extract_hosts_from_xml, save_nmap_html
+
+            xml_text = xml_path.read_text(encoding="utf-8")
+            hosts = extract_hosts_from_xml(xml_text, "127.0.0.1")
+            target = hosts[0].get("ip", "127.0.0.1") if hosts else "127.0.0.1"
+            save_nmap_html(full_path.parent, hosts, target=target, nmap_command="nmap (from scan.xml)")
     return send_from_directory(REPORTS_DIR, filepath)
 
 
@@ -577,7 +717,7 @@ def _print_startup_banner(port: int = 8080) -> str:
         lines.append(f"  → {url}")
     lines.extend([
         "",
-        "  三页：主动探测 | 被动防御 | IP 配置",
+        "  四页：主动探测 | 被动防御 | IP 配置 | Nmap扫描与对比教学",
         "  推荐：一键攻防联调（单界面自动先防御后攻击）",
         "  按 Ctrl+C 停止服务",
         "=" * 56,
