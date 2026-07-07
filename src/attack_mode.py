@@ -125,14 +125,21 @@ def run_attack_suite(
     }
 
     log.info("[2/5] AI 风险分析（基于最佳扫描 task_id=%s）...", best_task_id)
-    ai_result = AIAnalyzer().analyze_task(best_task_id)
+    analyzer = AIAnalyzer()
+    ai_result = analyzer.analyze_task(best_task_id)
+    api_status = ai_result.get("api_key_status")
+    if not api_status:
+        api_status = "已配置" if analyzer._api_available else "未配置或无效"
+    if "error" in ai_result:
+        log.warning("AI 分析: %s", ai_result["error"])
     summary["ai_analysis"] = {
         "total_ports": ai_result.get("total_ports", 0),
         "cache_hits": ai_result.get("cache_hits", 0),
         "api_calls": ai_result.get("api_calls", 0),
         "local_rules": ai_result.get("local_rules", 0),
-        "api_key_status": ai_result.get("api_key_status", "未知"),
-        "model": ai_result.get("model", ""),
+        "api_key_status": api_status,
+        "model": ai_result.get("model", analyzer.model),
+        "skipped_reason": ai_result.get("error"),
     }
 
     log.info("[3/5] 生成报告...")
@@ -277,14 +284,21 @@ def run_attack_mode(
 
     # 2. AI 分析
     log.info("[2/5] AI 风险分析...")
-    ai_result = AIAnalyzer().analyze_task(task_id)
+    analyzer = AIAnalyzer()
+    ai_result = analyzer.analyze_task(task_id)
+    api_status = ai_result.get("api_key_status")
+    if not api_status:
+        api_status = "已配置" if analyzer._api_available else "未配置或无效"
+    if "error" in ai_result:
+        log.warning("AI 分析: %s", ai_result["error"])
     summary["ai_analysis"] = {
         "total_ports": ai_result.get("total_ports", 0),
         "cache_hits": ai_result.get("cache_hits", 0),
         "api_calls": ai_result.get("api_calls", 0),
         "local_rules": ai_result.get("local_rules", 0),
-        "api_key_status": ai_result.get("api_key_status", "未知"),
-        "model": ai_result.get("model", ""),
+        "api_key_status": api_status,
+        "model": ai_result.get("model", analyzer.model),
+        "skipped_reason": ai_result.get("error"),
     }
 
     # 3. 报告（先生成图表，再生成 HTML 以便嵌入截图）

@@ -237,7 +237,9 @@ class ReportGenerator:
                 f"- 本地规则降级: {ai_stats.get('local_rules', 0)} 次",
                 f"- API Key 配置: `{ai_stats.get('api_key_status', '未知')}`",
             ])
-            if ai_stats.get("cache_hits", 0) > 0 and ai_stats.get("api_calls", 0) == 0:
+            if ai_stats.get("skipped_reason"):
+                lines.append(f"- 说明: {ai_stats['skipped_reason']}")
+            elif ai_stats.get("cache_hits", 0) > 0 and ai_stats.get("api_calls", 0) == 0:
                 lines.append(
                     "- 说明: 相同服务/版本已写入 `data/ai_cache.json`，未重复调用 Kimi API"
                 )
@@ -290,8 +292,18 @@ class ReportGenerator:
         if recommendations:
             for i, rec in enumerate(recommendations[:10], 1):
                 lines.append(f"{i}. {rec}")
+        elif data.get("total_ports", 0) == 0:
+            lines.append(
+                "1. **本次扫描未发现开放端口**，AI 没有可分析的目标。"
+                "请确认目标在线，并尝试 `-t 127.0.0.1 --ports 22,80,443` 或 Web 攻击页指定常见端口。"
+            )
+        elif ai_stats and ai_stats.get("api_key_status") == "未配置或无效":
+            lines.append(
+                "1. **Kimi API Key 未配置**：复制 `config/api_keys.json.example` 为 "
+                "`config/api_keys.json` 并填入密钥；未配置时开放端口仅走本地规则库分析。"
+            )
         else:
-            lines.append("1. 暂无 AI 分析结果，建议先运行 AI 分析。")
+            lines.append("1. 暂无 AI 分析结果，请检查 `data/insightscan.log` 或重新运行 `--ai-analyze`。")
 
         scan_cfg = data["scan_cfg"]
         lines.extend(

@@ -4,12 +4,21 @@ let uiConfig = {};
 let pollTimer = null;
 let statusTimer = null;
 let attackTypes = [];
+/** 攻防联调三处下拉框共享的目标（避免切页被 uiConfig 覆盖） */
+let drillTargetPrefs = null;
 
 const TARGET_SELECT_IDS = [
   "attack-target-select",
   "attack-solo-target-select",
   "defense-target-select",
   "defense-solo-target-select",
+];
+
+/** 攻击页 / 防御页联调共用的三个下拉框 */
+const DRILL_TARGET_BINDINGS = [
+  ["attack-target-select", "attack-target-custom-row", "attack-target-custom"],
+  ["defense-target-select", "defense-target-custom-row", "defense-target-custom"],
+  ["defense-solo-target-select", "defense-solo-custom-row", "defense-solo-target-custom"],
 ];
 
 // ---------- 导航 ----------
@@ -28,7 +37,9 @@ function switchPage(page) {
   if (page !== "config") {
     applyAllTargetSelectors();
   }
-  if (page === "defense") refreshRuntimeStatus();
+  if (page === "defense") {
+    refreshRuntimeStatus();
+  }
   if (page === "nmap-lab") {
     loadNmapComparison();
     loadReportList("nmap_lab");
@@ -58,8 +69,75 @@ function buildTargetOptionsHtml() {
 function refreshAllTargetSelectOptions() {
   TARGET_SELECT_IDS.forEach((id) => {
     const sel = document.getElementById(id);
-    if (sel) sel.innerHTML = buildTargetOptionsHtml();
+    if (!sel) return;
+    const prevMode = sel.value;
+    const customId = id.replace("-select", "-custom");
+    const prevCustom = document.getElementById(customId)?.value || "";
+    sel.innerHTML = buildTargetOptionsHtml();
+    if ([...sel.options].some((o) => o.value === prevMode)) {
+      sel.value = prevMode;
+    }
+    const customEl = document.getElementById(customId);
+    if (customEl && prevCustom) customEl.value = prevCustom;
   });
+}
+
+function drillPrefsFromConfig(cfg) {
+  const { mode, custom } = inferTargetMode(cfg);
+  return {
+    mode,
+    custom,
+    resolved: resolveTargetFromMode(mode, custom),
+  };
+}
+
+function resolveTargetFromMode(mode, custom) {
+  if (mode === "127.0.0.1") return "127.0.0.1";
+  if (mode === "local_ip") return uiConfig.local_ip || uiConfig.attack_target || "127.0.0.1";
+  if (mode === "cidr") return uiConfig.cidr || uiConfig.perf_target || uiConfig.attack_target || "127.0.0.1";
+  return (custom || uiConfig.attack_target || "127.0.0.1").trim() || "127.0.0.1";
+}
+
+function readTargetSelector(selectId, customInputId) {
+  const sel = document.getElementById(selectId);
+  if (!sel) return null;
+  const mode = sel.value;
+  const custom = document.getElementById(customInputId)?.value.trim() || "";
+  return {
+    mode,
+    custom,
+    resolved: resolveTargetFrom(selectId, customInputId),
+  };
+}
+
+function writeTargetSelector(selectId, rowId, inputId, prefs) {
+  const sel = document.getElementById(selectId);
+  if (!sel || !prefs) return;
+  if ([...sel.options].some((o) => o.value === prefs.mode)) {
+    sel.value = prefs.mode;
+  } else {
+    sel.value = "custom";
+  }
+  const row = document.getElementById(rowId);
+  if (row) row.style.display = sel.value === "custom" ? "block" : "none";
+  const input = document.getElementById(inputId);
+  if (input && sel.value === "custom") {
+    input.value = prefs.custom || "";
+  }
+}
+
+function applyDrillTargetPrefs(prefs) {
+  if (!prefs) return;
+  drillTargetPrefs = prefs;
+  DRILL_TARGET_BINDINGS.forEach(([selId, rowId, inputId]) => {
+    writeTargetSelector(selId, rowId, inputId, prefs);
+  });
+}
+
+function captureDrillTargetFrom(selectId, customInputId) {
+  const prefs = readTargetSelector(selectId, customInputId);
+  if (prefs) applyDrillTargetPrefs(prefs);
+  return drillTargetPrefs;
 }
 
 function inferTargetMode(cfg) {
@@ -93,11 +171,20 @@ function applyTargetSelector(selectId, customRowId, customInputId, cfg) {
 }
 
 function applyAllTargetSelectors() {
+  const keepDrill = drillTargetPrefs;
   refreshAllTargetSelectOptions();
-  applyTargetSelector("attack-target-select", "attack-target-custom-row", "attack-target-custom", uiConfig);
   applyTargetSelector("attack-solo-target-select", "attack-solo-custom-row", "attack-solo-target-custom", uiConfig);
-  applyTargetSelector("defense-target-select", "defense-target-custom-row", "defense-target-custom", uiConfig);
-  applyTargetSelector("defense-solo-target-select", "defense-solo-custom-row", "defense-solo-target-custom", uiConfig);
+  if (keepDrill) {
+    applyDrillTargetPrefs(keepDrill);
+  } else {
+    applyDrillTargetPrefs(drillPrefsFromConfig(uiConfig));
+  }
+}
+
+/** 联调/防御监听 IP：与当前页面选中的攻击/联调目标一致（IP 配置页仅提供下拉选项） */
+function resolveDefenseHostForDrill(attackTarget) {
+  const t = (attackTarget || "").trim();
+  return t || "127.0.0.1";
 }
 
 function resolveTargetFrom(selectId, customInputId) {
@@ -128,14 +215,23 @@ function bindTargetSelectChange(selectId, rowId) {
 }
 
 const TARGET_BINDINGS = [
-  ["attack-target-select", "attack-target-custom-row"],
   ["attack-solo-target-select", "attack-solo-custom-row"],
-  ["defense-target-select", "defense-target-custom-row"],
-  ["defense-solo-target-select", "defense-solo-custom-row"],
 ];
 
 TARGET_BINDINGS.forEach(([selectId, rowId]) => {
   bindTargetSelectChange(selectId, rowId);
+});
+
+DRILL_TARGET_BINDINGS.forEach(([selectId, rowId, inputId]) => {
+  bindTargetSelectChange(selectId, rowId);
+  const sel = document.getElementById(selectId);
+  if (!sel) return;
+  sel.addEventListener("change", () => {
+    captureDrillTargetFrom(selectId, inputId);
+  });
+  document.getElementById(inputId)?.addEventListener("input", () => {
+    if (sel.value === "custom") captureDrillTargetFrom(selectId, inputId);
+  });
 });
 
 async function refreshRuntimeStatus() {
@@ -164,8 +260,10 @@ async function loadConfig() {
   }
   if (cfgData.success) {
     uiConfig = cfgData.config;
+    drillTargetPrefs = drillPrefsFromConfig(uiConfig);
     fillConfigForm(uiConfig);
     applyAllTargetSelectors();
+    syncNmapFromConfig(uiConfig, { silent: true });
     refreshRuntimeStatus();
   }
 }
@@ -215,14 +313,66 @@ document.getElementById("btn-save-config").addEventListener("click", async () =>
   const msg = document.getElementById("config-msg");
   if (data.success) {
     uiConfig = data.config;
+    drillTargetPrefs = drillPrefsFromConfig(uiConfig);
     applyAllTargetSelectors();
-    msg.textContent = "配置已保存，攻击/防御页目标已同步";
+    syncNmapFromConfig(uiConfig);
+    msg.textContent = "配置已保存，攻击/防御与 Nmap 教学页目标已同步";
     msg.className = "hint status-ok";
   } else {
     msg.textContent = data.error || "保存失败";
     msg.className = "hint status-err";
   }
 });
+
+function resolveNmapTarget(cfg) {
+  const t = (
+    cfg.attack_target ||
+    cfg.defense_attack_target ||
+    cfg.local_ip ||
+    "127.0.0.1"
+  ).trim();
+  return t || "127.0.0.1";
+}
+
+function resolveNmapPorts(cfg) {
+  return (cfg.attack_ports || "22,80,443").trim() || "22,80,443";
+}
+
+/** 读取 IP 配置页表单（含未保存的编辑）用于 Nmap 同步 */
+function readConfigFormSnapshot() {
+  const localIp = document.getElementById("cfg-local-ip")?.value.trim();
+  const attackTarget = document.getElementById("cfg-attack-target")?.value.trim();
+  const defenseTarget = document.getElementById("cfg-defense-attack-target")?.value.trim();
+  const attackPorts = document.getElementById("cfg-attack-ports")?.value.trim();
+  return {
+    ...uiConfig,
+    local_ip: localIp || uiConfig.local_ip,
+    attack_target: attackTarget || uiConfig.attack_target,
+    defense_attack_target: defenseTarget || uiConfig.defense_attack_target,
+    attack_ports: attackPorts || uiConfig.attack_ports,
+  };
+}
+
+function syncNmapFromConfig(cfg, opts = {}) {
+  const targetEl = document.getElementById("nmap-target");
+  const portsEl = document.getElementById("nmap-ports");
+  const hintEl = document.getElementById("nmap-sync-hint");
+  if (!targetEl || !portsEl) return;
+  const c = cfg || uiConfig;
+  const target = resolveNmapTarget(c);
+  const ports = resolveNmapPorts(c);
+  targetEl.value = target;
+  portsEl.value = ports;
+  if (hintEl) {
+    if (opts.silent) {
+      hintEl.textContent = `当前：目标 ${target} · 端口 ${ports}（来自 IP 配置）`;
+      hintEl.className = "hint";
+    } else {
+      hintEl.textContent = `已同步：目标 ${target} · 端口 ${ports}`;
+      hintEl.className = "hint status-ok";
+    }
+  }
+}
 
 async function detectNetwork(apply) {
   const data = await api("/api/network/detect", {
@@ -243,10 +393,16 @@ async function detectNetwork(apply) {
     }
     if (data.config) {
       uiConfig = data.config;
+      drillTargetPrefs = drillPrefsFromConfig(uiConfig);
       fillConfigForm(uiConfig);
       applyAllTargetSelectors();
+      syncNmapFromConfig(uiConfig);
+    } else {
+      syncNmapFromConfig(readConfigFormSnapshot());
     }
-    msg.textContent = apply ? "已检测并应用，各页目标已更新" : "检测完成，请确认后保存";
+    msg.textContent = apply
+      ? "已检测并应用，攻击/防御与 Nmap 教学页目标已同步"
+      : "检测完成，Nmap 教学页已预览同步，请确认后保存";
     msg.className = "hint status-ok";
   } else {
     msg.textContent = data.error || "检测失败";
@@ -258,10 +414,13 @@ document.getElementById("btn-detect").addEventListener("click", () => detectNetw
 document.getElementById("btn-detect-apply").addEventListener("click", () => detectNetwork(true));
 
 function drillPayload(selectId, customInputId, extra = {}) {
-  const tp = targetPayload(selectId, customInputId);
+  const prefs = captureDrillTargetFrom(selectId, customInputId);
+  const attackTarget = prefs?.resolved || resolveTargetFrom(selectId, customInputId);
   return {
-    ...tp,
-    defense_host: uiConfig.local_ip || "127.0.0.1",
+    target: attackTarget,
+    target_mode: prefs?.mode || document.getElementById(selectId)?.value,
+    target_custom: prefs?.custom || document.getElementById(customInputId)?.value.trim() || "",
+    defense_host: resolveDefenseHostForDrill(attackTarget),
     ports: document.getElementById("attack-ports").value.trim() || uiConfig.attack_ports,
     duration: parseInt(document.getElementById("defense-duration").value, 10) || 60,
     apply_iptables: document.getElementById("defense-iptables").checked,
@@ -364,7 +523,7 @@ function renderAttackResult(job) {
 function renderDefenseResult(job) {
   const r = job.result || {};
   const dir = r.session_dir || "";
-  let html = `<p><strong>防御主机:</strong> ${r.defense_host || uiConfig.local_ip || "本机"}</p>`;
+  let html = `<p><strong>防御主机:</strong> ${r.defense_host || "—"}</p>`;
   html += `<p><strong>报告目录:</strong> ${dir}</p>`;
   html += `<p><a href="${reportLink(dir, "defense_report.md")}" target="_blank">查看防御报告</a></p>`;
   if (r.scan_detection) {
@@ -423,6 +582,7 @@ async function runDrill(fromDefensePage) {
     : document.getElementById("btn-drill-attack");
   const selectId = fromDefensePage ? "defense-target-select" : "attack-target-select";
   const customId = fromDefensePage ? "defense-target-custom" : "attack-target-custom";
+  captureDrillTargetFrom(selectId, customId);
   btn.disabled = true;
   const data = await api("/api/drill", {
     method: "POST",
@@ -430,6 +590,7 @@ async function runDrill(fromDefensePage) {
   });
   btn.disabled = false;
   if (data.job_id) {
+    applyDrillTargetPrefs(drillTargetPrefs);
     if (fromDefensePage) {
       startDrillPoll(data.job_id, "defense-drill");
     } else {
@@ -457,6 +618,8 @@ document.getElementById("btn-attack").addEventListener("click", async () => {
   btn.disabled = false;
   if (!data.job_id) return;
   if (data.mode === "drill") {
+    captureDrillTargetFrom("attack-solo-target-select", "attack-solo-target-custom");
+    applyDrillTargetPrefs(drillTargetPrefs);
     startDrillPoll(data.job_id, "drill");
     switchPage("defense");
     return;
@@ -500,6 +663,7 @@ document.getElementById("btn-perf").addEventListener("click", async () => {
 document.getElementById("btn-defense").addEventListener("click", async () => {
   const btn = document.getElementById("btn-defense");
   btn.disabled = true;
+  captureDrillTargetFrom("defense-solo-target-select", "defense-solo-target-custom");
   const tp = targetPayload("defense-solo-target-select", "defense-solo-target-custom");
   const data = await api("/api/defense", {
     method: "POST",
@@ -507,7 +671,7 @@ document.getElementById("btn-defense").addEventListener("click", async () => {
       ...tp,
       duration: parseInt(document.getElementById("defense-duration").value, 10) || 60,
       apply_iptables: document.getElementById("defense-iptables").checked,
-      defense_host: uiConfig.local_ip || "127.0.0.1",
+      defense_host: resolveDefenseHostForDrill(tp.target),
       pair_attack: true,
       auto_drill: document.getElementById("defense-auto-drill").checked,
     }),
@@ -515,6 +679,7 @@ document.getElementById("btn-defense").addEventListener("click", async () => {
   btn.disabled = false;
   if (!data.job_id) return;
   if (data.mode === "drill") {
+    applyDrillTargetPrefs(drillTargetPrefs);
     startDrillPoll(data.job_id, "defense-drill");
     return;
   }
@@ -573,12 +738,16 @@ statusTimer = setInterval(refreshRuntimeStatus, 5000);
 let nmapPollTimer = null;
 
 function nmapTarget() {
-  return document.getElementById("nmap-target").value.trim() || "127.0.0.1";
+  return document.getElementById("nmap-target").value.trim() || resolveNmapTarget(uiConfig);
 }
 
 function nmapPorts() {
-  return document.getElementById("nmap-ports").value.trim() || "21,23,80,3306";
+  return document.getElementById("nmap-ports").value.trim() || resolveNmapPorts(uiConfig);
 }
+
+document.getElementById("btn-nmap-sync-config").addEventListener("click", () => {
+  syncNmapFromConfig(readConfigFormSnapshot());
+});
 
 function stopNmapPoll() {
   if (nmapPollTimer) {

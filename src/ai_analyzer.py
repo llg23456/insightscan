@@ -476,7 +476,17 @@ class AIAnalyzer:
 
             if not rows:
                 conn.close()
-                return {"error": f"任务 {task_id} 无扫描结果"}
+                return {
+                    "error": f"任务 {task_id} 无开放端口，跳过 AI 分析",
+                    "task_id": task_id,
+                    "total_ports": 0,
+                    "cache_hits": 0,
+                    "api_calls": 0,
+                    "local_rules": 0,
+                    "api_key_status": "已配置" if self._api_available else "未配置或无效",
+                    "model": self.model,
+                    "hosts": [],
+                }
 
             ports = [
                 {

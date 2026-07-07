@@ -147,7 +147,7 @@
 
     <section id="page-config" class="page">
       <h1>IP 与扫描配置</h1>
-      <p class="desc">保存后刷新或切换页面，攻击/防御的目标下拉会自动同步。请先「检测并应用」或手动填写本机 IP。</p>
+      <p class="desc">保存或「检测并应用」后，攻击/防御目标与 <strong>Nmap 教学页</strong> 的 IP、端口会自动同步。请先「检测并应用」或手动填写本机 IP。</p>
 
       <div class="card">
         <div class="btn-group" style="margin-bottom:16px">
@@ -212,13 +212,17 @@
         <div class="form-grid">
           <div class="form-row">
             <label>目标 IP</label>
-            <input type="text" id="nmap-target" placeholder="127.0.0.1" value="127.0.0.1">
+            <input type="text" id="nmap-target" placeholder="与 IP 配置页「默认攻击目标」同步">
           </div>
           <div class="form-row">
             <label>端口（Zenmap / Connect / SYN）</label>
-            <input type="text" id="nmap-ports" placeholder="21,23,80,3306" value="21,23,80,3306">
+            <input type="text" id="nmap-ports" placeholder="与 IP 配置页「攻击端口」同步">
           </div>
         </div>
+        <div class="btn-group" style="margin-top:12px">
+          <button class="btn btn-secondary" id="btn-nmap-sync-config">从 IP 配置同步</button>
+        </div>
+        <p id="nmap-sync-hint" class="hint">首次打开或 IP 配置页「检测并应用」后会自动填入目标与端口。</p>
         <p class="hint">全端口扫描固定范围 <strong>1-1000</strong>（实验书为 1-65535，Web 演示缩短耗时）</p>
         <div id="nmap-privilege-alert" class="alert alert-info" style="display:none;margin-top:12px"></div>
         <div id="nmap-privilege-warn" class="alert alert-warn" style="display:none;margin-top:12px"></div>
@@ -267,6 +271,6 @@
   </main>
 
   <footer class="footer">InsightScan · 报告目录 reports/</footer>
-  <script src="/static/js/main.js"></script>
+  <script src="/static/js/main.js?v=20260707c"></script>
 </body>
 </html>

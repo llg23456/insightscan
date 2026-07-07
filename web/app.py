@@ -54,8 +54,7 @@ def _find_running_attack() -> tuple[str, dict] | tuple[None, None]:
 
 
 def _resolve_drill_targets(cfg: dict, data: dict) -> dict:
-    """解析攻防联调用的攻击目标与本机防御 IP。"""
-    defense_host = data.get("defense_host") or cfg.get("local_ip") or "127.0.0.1"
+    """解析攻防联调目标；攻击/防御 IP 以页面提交值为准，配置页 local_ip 仅作下拉辅助。"""
     attack_target = data.get("target") or resolve_target(
         cfg,
         data.get("target_mode"),
@@ -63,6 +62,7 @@ def _resolve_drill_targets(cfg: dict, data: dict) -> dict:
     )
     if not data.get("target") and cfg.get("defense_attack_target"):
         attack_target = cfg["defense_attack_target"]
+    defense_host = (data.get("defense_host") or attack_target or "").strip() or "127.0.0.1"
     ports = data.get("ports") or cfg.get("attack_ports", "22,80,443")
     return {
         "attack_target": attack_target,
@@ -598,12 +598,22 @@ def api_defense():
     duration = int(data.get("duration", cfg.get("defense_duration", 60)))
     apply_iptables = bool(data.get("apply_iptables", cfg.get("defense_apply_iptables", False)))
     lookback = int(data.get("lookback", 10))
-    defense_host = data.get("defense_host") or cfg.get("local_ip", "127.0.0.1")
+    page_target = data.get("target") or resolve_target(
+        cfg, data.get("target_mode"), data.get("target_custom")
+    )
+    defense_host = (
+        (data.get("defense_host") or page_target or "").strip()
+        or "127.0.0.1"
+    )
     pair_attack = bool(data.get("pair_attack", True))
     auto_drill = bool(data.get("auto_drill", True))
 
     attack_id, attack_info = _find_running_attack()
     if pair_attack and attack_id:
+        defense_host = (
+            (attack_info.get("target") or defense_host or "").strip()
+            or "127.0.0.1"
+        )
         defense_job_id = _start_defense_job(duration, apply_iptables, lookback, defense_host)
         return jsonify({
             "success": True,
@@ -619,7 +629,7 @@ def api_defense():
         drill_data = {
             **data,
             "defense_host": defense_host,
-            "target": data.get("target") or cfg.get("defense_attack_target") or defense_host,
+            "target": page_target or data.get("target") or defense_host,
         }
         resp = api_drill_with_data(drill_data, cfg)
         resp_data = resp.get_json()
