@@ -2,7 +2,10 @@
 
 import ipaddress
 import json
+import shlex
+import shutil
 import sqlite3
+import subprocess
 import sys
 import threading
 import time
@@ -149,6 +152,7 @@ class ScanEngine:
                         self._update_progress(total)
 
             duration = round(time.time() - start_time, 2)
+            all_hosts = self._filter_hosts_by_target(all_hosts, target, hosts)
             total_ports = sum(len(h.get("ports", [])) for h in all_hosts)
             parsed = {
                 "target": target,
@@ -182,6 +186,8 @@ class ScanEngine:
                     total_ports=total_ports,
                     error_msg="; ".join(errors[:5]) if errors else None,
                 )
+            elif task_id is not None:
+                parsed["task_id"] = task_id
 
             self.logger.info(
                 "扫描完成: hosts=%d ports=%d 耗时=%ss",
@@ -242,15 +248,84 @@ class ScanEngine:
             "fin": self.scan_fin,
         }[scan_type]
 
+    def _sudo_nmap_available(self) -> bool:
+        """检测是否已配置 sudo 免密 nmap（与 nmap_lab 一致）。"""
+        nmap_bin = shutil.which("nmap")
+        if not nmap_bin:
+            return False
+        try:
+            result = subprocess.run(
+                ["sudo", "-n", nmap_bin, "--version"],
+                capture_output=True,
+                timeout=10,
+            )
+            return result.returncode == 0
+        except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+            return False
+
+    def _run_nmap_via_sudo(
+        self, target: str, arguments: str, scan_type: str
+    ) -> dict[str, Any]:
+        """SYN/FIN 等需 root 的扫描：sudo -n nmap -oX -。"""
+        nmap_bin = shutil.which("nmap") or "nmap"
+        cmd = ["sudo", "-n", nmap_bin] + shlex.split(arguments) + ["-oX", "-", target]
+        self.logger.debug("Nmap sudo 扫描 %s: %s", target, " ".join(cmd))
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            timeout=max(self.timeout + 60, 120),
+        )
+        stderr = (proc.stderr or b"").decode("utf-8", errors="replace").strip()
+        if proc.returncode != 0:
+            raise RuntimeError(stderr or f"nmap 退出码 {proc.returncode}")
+        raw_xml = proc.stdout
+        if isinstance(raw_xml, bytes):
+            raw_xml = raw_xml.decode("utf-8", errors="replace")
+        parsed = parse_nmap_xml_to_json(raw_xml)
+        if "error" in parsed:
+            raise RuntimeError(parsed["error"])
+        hosts: list[dict[str, Any]] = []
+        for h in parsed.get("hosts", []):
+            os_guess = self._format_os_guess(h.get("os_matches", []))
+            ports = []
+            for p in h.get("ports", []):
+                ports.append({**p, "os_guess": os_guess})
+            hosts.append(
+                {
+                    "ip": h.get("ip") or target,
+                    "hostname": "",
+                    "state": h.get("state", "unknown"),
+                    "scan_type": scan_type,
+                    "os_matches": h.get("os_matches", []),
+                    "os_guess": os_guess,
+                    "ports": ports,
+                }
+            )
+        return {"hosts": hosts, "xml_parsed": parsed}
+
     def _run_single_host_scan(
         self, target: str, ports: str, scan_type: str
     ) -> dict[str, Any]:
         """对单个主机执行 Nmap 扫描，含重试逻辑。"""
+        arguments = self._build_nmap_args(scan_type, ports)
+        if scan_type in ROOT_REQUIRED_TYPES:
+            if not self._sudo_nmap_available():
+                return {
+                    "error": (
+                        "SYN/FIN 扫描需要 root 权限。"
+                        "请执行: bash scripts/setup_nmap_sudoers.sh"
+                    )
+                }
+            try:
+                return self._run_nmap_via_sudo(target, arguments, scan_type)
+            except Exception as e:
+                self.logger.warning("Nmap sudo 扫描失败 %s: %s", target, e)
+                return {"error": str(e)}
+
         last_error = ""
         for attempt in range(self.retry_count + 1):
             try:
                 nm = nmap.PortScanner()
-                arguments = self._build_nmap_args(scan_type, ports)
                 self.logger.debug("Nmap 扫描 %s: nmap %s %s", target, arguments, target)
                 nm.scan(hosts=target, arguments=arguments)
                 hosts = self._parse_nmap_results(nm, target, scan_type)
@@ -258,6 +333,8 @@ class ScanEngine:
                 return {"hosts": hosts, "xml_parsed": xml_data}
             except nmap.PortScannerError as e:
                 last_error = str(e)
+                if "root privilege" in last_error.lower() or "requires root" in last_error.lower():
+                    break
                 self.logger.warning(
                     "Nmap 扫描失败 (attempt %d/%d) %s: %s",
                     attempt + 1,
@@ -282,6 +359,26 @@ class ScanEngine:
         if scan_type in ROOT_REQUIRED_TYPES:
             base += " -O --osscan-guess"
         return base
+
+    def _filter_hosts_by_target(
+        self,
+        all_hosts: list[dict[str, Any]],
+        target: str,
+        expanded: list[str],
+    ) -> list[dict[str, Any]]:
+        """丢弃与本次扫描目标不一致的主机结果，避免并发/误扫污染报告。"""
+        allowed = set(expanded)
+        if "/" not in target.strip():
+            allowed = {target.strip()}
+        filtered = [h for h in all_hosts if h.get("ip") in allowed]
+        dropped = len(all_hosts) - len(filtered)
+        if dropped:
+            self.logger.warning(
+                "已丢弃 %d 个与目标 %s 不匹配的主机扫描结果",
+                dropped,
+                target,
+            )
+        return filtered
 
     def _expand_targets(self, target: str) -> list[str]:
         """将 IP 或 CIDR 展开为主机地址列表。"""

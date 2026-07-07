@@ -22,6 +22,7 @@ def run_defense_mode(
     duration_sec: int = 0,
     apply_iptables: bool = False,
     lookback_minutes: Optional[int] = None,
+    self_scan_target: Optional[str] = None,
 ) -> dict[str, Any]:
     """
     被动防御完整流程：扫描检测 → 混杂模式 → 自查端口 → iptables → 报告。
@@ -30,6 +31,7 @@ def run_defense_mode(
         duration_sec: 持续监控秒数，0 表示单次检测。
         apply_iptables: 是否自动部署 iptables（需 sudo）。
         lookback_minutes: 日志回溯分钟数。
+        self_scan_target: 最后一轮「端口自查」目标；默认 127.0.0.1（与攻击联调目标无关）。
 
     Returns:
         会话结果字典。
@@ -75,11 +77,14 @@ def run_defense_mode(
 
         # 3. 自查本机端口（仅在最后一轮，避免拖慢监控）
         if i == rounds - 1:
-            log.info("[3/4] 自查本机暴露端口...")
+            log.info(
+                "[3/4] 防御侧本机端口自查: 127.0.0.1（仅 iptables 参考，不入攻击报告库）"
+            )
             local_scan = ScanEngine().scan(
                 "127.0.0.1",
                 scan_type="connect",
                 ports=get_setting("scan.default_ports", "1-1000"),
+                save_db=False,
             )
 
         if duration_sec > 0 and i < rounds - 1:
@@ -90,6 +95,11 @@ def run_defense_mode(
     scan_detect["events"] = unique_events
     scan_detect["total_events"] = len(unique_events)
     task_id = local_scan.get("task_id")
+    exposed_ports: list[int] = []
+    for host in local_scan.get("hosts", []):
+        for port_info in host.get("ports", []):
+            if port_info.get("state") in ("open", "open|filtered"):
+                exposed_ports.append(int(port_info["port"]))
 
     # 4. iptables 自动化防御
     log.info("[4/4] 生成 iptables 防御规则...")
@@ -97,6 +107,7 @@ def run_defense_mode(
     iptables = IptablesDefense()
     rules_result = iptables.generate_rules(
         task_id=task_id,
+        exposed_ports=sorted(set(exposed_ports)),
         scanner_ips=scanner_ips,
         block_high_risk_inbound=True,
     )

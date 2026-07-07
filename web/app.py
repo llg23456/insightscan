@@ -169,6 +169,7 @@ def _run_defense_job(
             duration_sec=duration,
             apply_iptables=apply_iptables,
             lookback_minutes=lookback,
+            self_scan_target=defense_host or None,
         )
         if "error" in result:
             _update_job(job_id, status="error", error=result["error"], progress="失败")
@@ -521,16 +522,22 @@ def api_attack():
     data = request.get_json(silent=True) or {}
     cfg = load_ui_settings()
     run_perf = bool(data.get("perf", False))
-    target = data.get("target") or resolve_target(
-        cfg, data.get("target_mode"), data.get("target_custom")
-    )
-    if not data.get("target") and not run_perf:
-        target = resolve_target(cfg)
-    if run_perf:
-        target = data.get("target") or cfg.get("perf_target") or cfg.get("cidr") or target
+    target = (data.get("target") or "").strip()
+    if not target:
+        if run_perf:
+            target = cfg.get("perf_target") or cfg.get("cidr") or resolve_target(cfg)
+        else:
+            target = resolve_target(
+                cfg, data.get("target_mode"), data.get("target_custom")
+            )
     ports = data.get("ports") or (cfg["perf_ports"] if run_perf else cfg["attack_ports"])
     with_defense = bool(data.get("with_defense", False))
     full_suite = bool(data.get("full_suite", not run_perf))
+    log = setup_logging()
+    log.info(
+        "API /attack: target=%s ports=%s perf=%s full_suite=%s with_defense=%s",
+        target, ports, run_perf, full_suite, with_defense,
+    )
 
     if with_defense and not run_perf:
         drill_data = {**data, "target": target, "ports": ports}

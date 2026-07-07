@@ -375,6 +375,7 @@ class IptablesDefense:
         self,
         task_id: Optional[int] = None,
         scanner_ips: Optional[list[str]] = None,
+        exposed_ports: Optional[list[int]] = None,
         block_high_risk_inbound: bool = True,
     ) -> dict[str, Any]:
         """
@@ -383,6 +384,7 @@ class IptablesDefense:
         Args:
             task_id: 扫描任务 ID，用于识别本机高危暴露端口。
             scanner_ips: 检测到的扫描来源 IP 列表。
+            exposed_ports: 直接传入的暴露端口列表（防御自查 save_db=False 时用）。
             block_high_risk_inbound: 是否封禁外网访问高危端口。
 
         Returns:
@@ -410,7 +412,9 @@ class IptablesDefense:
 
             # 封禁外网访问高危端口
             if block_high_risk_inbound:
-                exposed = self._get_exposed_high_risk_ports(task_id)
+                exposed = list(exposed_ports or [])
+                if not exposed and task_id:
+                    exposed = self._get_exposed_high_risk_ports(task_id)
                 for port in exposed:
                     cmd = (
                         f"iptables -A INPUT -p tcp --dport {port} "

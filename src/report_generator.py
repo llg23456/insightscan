@@ -1,6 +1,7 @@
 """报告生成器：Markdown/HTML 报告、风险统计与可视化。"""
 
 import json
+import ipaddress
 import sqlite3
 import sys
 from datetime import datetime
@@ -115,6 +116,26 @@ class ReportGenerator:
             self.logger.error("报告生成失败: %s", e)
             return {"error": f"报告生成失败: {e}"}
 
+    def _filter_results_by_target(
+        self, rows: list[dict[str, Any]], target_str: str
+    ) -> list[dict[str, Any]]:
+        """只保留与任务目标一致的主机扫描结果。"""
+        target_str = (target_str or "").strip()
+        if not target_str or not rows:
+            return rows
+        if "/" in target_str:
+            try:
+                network = ipaddress.ip_network(target_str, strict=False)
+                return [
+                    r
+                    for r in rows
+                    if r.get("host_ip")
+                    and ipaddress.ip_address(str(r["host_ip"])) in network
+                ]
+            except ValueError:
+                return rows
+        return [r for r in rows if r.get("host_ip") == target_str]
+
     def _load_task_data(
         self, task_id: int, scan_duration: Optional[float] = None
     ) -> dict[str, Any]:
@@ -142,6 +163,19 @@ class ReportGenerator:
             ).fetchall()
 
             rows = [dict(r) for r in results]
+            target_str = str(task["target"] or "").strip()
+            before = len(rows)
+            rows = self._filter_results_by_target(rows, target_str)
+            if before != len(rows):
+                self.logger.warning(
+                    "任务 %s 目标 %s 含 %d 条非目标主机结果，已过滤",
+                    task_id,
+                    target_str,
+                    before - len(rows),
+                )
+            unique_hosts = {r.get("host_ip") for r in rows if r.get("host_ip")}
+            filtered_hosts = len(unique_hosts)
+            filtered_ports = len(rows)
             for row in rows:
                 if row.get("risk_analysis"):
                     try:
@@ -172,8 +206,8 @@ class ReportGenerator:
                 "start_time": format_display_time(task["start_time"]),
                 "end_time": format_display_time(task["end_time"], assume_utc_if_naive=False),
                 "status": task["status"],
-                "total_hosts": task["total_hosts"],
-                "total_ports": task["total_ports"],
+                "total_hosts": filtered_hosts,
+                "total_ports": filtered_ports,
                 "duration": duration,
                 "results": rows,
                 "scan_cfg": {

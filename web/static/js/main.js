@@ -4,8 +4,8 @@ let uiConfig = {};
 let pollTimer = null;
 let statusTimer = null;
 let attackTypes = [];
-/** 攻防联调三处下拉框共享的目标（避免切页被 uiConfig 覆盖） */
-let drillTargetPrefs = null;
+/** 攻击/联调共用的四个目标下拉框状态（避免单独攻击仍用 IP 配置页本机 IP） */
+let attackTargetPrefs = null;
 
 const TARGET_SELECT_IDS = [
   "attack-target-select",
@@ -14,9 +14,10 @@ const TARGET_SELECT_IDS = [
   "defense-solo-target-select",
 ];
 
-/** 攻击页 / 防御页联调共用的三个下拉框 */
-const DRILL_TARGET_BINDINGS = [
+/** 攻击页 + 防御页联调共用的目标下拉框 */
+const ATTACK_TARGET_BINDINGS = [
   ["attack-target-select", "attack-target-custom-row", "attack-target-custom"],
+  ["attack-solo-target-select", "attack-solo-custom-row", "attack-solo-target-custom"],
   ["defense-target-select", "defense-target-custom-row", "defense-target-custom"],
   ["defense-solo-target-select", "defense-solo-custom-row", "defense-solo-target-custom"],
 ];
@@ -82,15 +83,6 @@ function refreshAllTargetSelectOptions() {
   });
 }
 
-function drillPrefsFromConfig(cfg) {
-  const { mode, custom } = inferTargetMode(cfg);
-  return {
-    mode,
-    custom,
-    resolved: resolveTargetFromMode(mode, custom),
-  };
-}
-
 function resolveTargetFromMode(mode, custom) {
   if (mode === "127.0.0.1") return "127.0.0.1";
   if (mode === "local_ip") return uiConfig.local_ip || uiConfig.attack_target || "127.0.0.1";
@@ -126,18 +118,40 @@ function writeTargetSelector(selectId, rowId, inputId, prefs) {
   }
 }
 
-function applyDrillTargetPrefs(prefs) {
+function attackPrefsFromConfig(cfg) {
+  const { mode, custom } = inferTargetMode(cfg);
+  return {
+    mode,
+    custom,
+    resolved: resolveTargetFromMode(mode, custom),
+  };
+}
+
+function applyAttackTargetPrefs(prefs) {
   if (!prefs) return;
-  drillTargetPrefs = prefs;
-  DRILL_TARGET_BINDINGS.forEach(([selId, rowId, inputId]) => {
+  attackTargetPrefs = prefs;
+  ATTACK_TARGET_BINDINGS.forEach(([selId, rowId, inputId]) => {
     writeTargetSelector(selId, rowId, inputId, prefs);
   });
 }
 
-function captureDrillTargetFrom(selectId, customInputId) {
+function captureAttackTargetFrom(selectId, customInputId) {
   const prefs = readTargetSelector(selectId, customInputId);
-  if (prefs) applyDrillTargetPrefs(prefs);
-  return drillTargetPrefs;
+  if (prefs) applyAttackTargetPrefs(prefs);
+  return attackTargetPrefs;
+}
+
+/** @deprecated */
+function applyDrillTargetPrefs(prefs) {
+  applyAttackTargetPrefs(prefs);
+}
+
+function captureDrillTargetFrom(selectId, customInputId) {
+  return captureAttackTargetFrom(selectId, customInputId);
+}
+
+function drillPrefsFromConfig(cfg) {
+  return attackPrefsFromConfig(cfg);
 }
 
 function inferTargetMode(cfg) {
@@ -171,13 +185,12 @@ function applyTargetSelector(selectId, customRowId, customInputId, cfg) {
 }
 
 function applyAllTargetSelectors() {
-  const keepDrill = drillTargetPrefs;
+  const keep = attackTargetPrefs;
   refreshAllTargetSelectOptions();
-  applyTargetSelector("attack-solo-target-select", "attack-solo-custom-row", "attack-solo-target-custom", uiConfig);
-  if (keepDrill) {
-    applyDrillTargetPrefs(keepDrill);
+  if (keep) {
+    applyAttackTargetPrefs(keep);
   } else {
-    applyDrillTargetPrefs(drillPrefsFromConfig(uiConfig));
+    applyAttackTargetPrefs(attackPrefsFromConfig(uiConfig));
   }
 }
 
@@ -222,15 +235,15 @@ TARGET_BINDINGS.forEach(([selectId, rowId]) => {
   bindTargetSelectChange(selectId, rowId);
 });
 
-DRILL_TARGET_BINDINGS.forEach(([selectId, rowId, inputId]) => {
+ATTACK_TARGET_BINDINGS.forEach(([selectId, rowId, inputId]) => {
   bindTargetSelectChange(selectId, rowId);
   const sel = document.getElementById(selectId);
   if (!sel) return;
   sel.addEventListener("change", () => {
-    captureDrillTargetFrom(selectId, inputId);
+    captureAttackTargetFrom(selectId, inputId);
   });
   document.getElementById(inputId)?.addEventListener("input", () => {
-    if (sel.value === "custom") captureDrillTargetFrom(selectId, inputId);
+    if (sel.value === "custom") captureAttackTargetFrom(selectId, inputId);
   });
 });
 
@@ -260,7 +273,7 @@ async function loadConfig() {
   }
   if (cfgData.success) {
     uiConfig = cfgData.config;
-    drillTargetPrefs = drillPrefsFromConfig(uiConfig);
+    attackTargetPrefs = attackPrefsFromConfig(uiConfig);
     fillConfigForm(uiConfig);
     applyAllTargetSelectors();
     syncNmapFromConfig(uiConfig, { silent: true });
@@ -313,7 +326,7 @@ document.getElementById("btn-save-config").addEventListener("click", async () =>
   const msg = document.getElementById("config-msg");
   if (data.success) {
     uiConfig = data.config;
-    drillTargetPrefs = drillPrefsFromConfig(uiConfig);
+    attackTargetPrefs = attackPrefsFromConfig(uiConfig);
     applyAllTargetSelectors();
     syncNmapFromConfig(uiConfig);
     msg.textContent = "配置已保存，攻击/防御与 Nmap 教学页目标已同步";
@@ -393,7 +406,7 @@ async function detectNetwork(apply) {
     }
     if (data.config) {
       uiConfig = data.config;
-      drillTargetPrefs = drillPrefsFromConfig(uiConfig);
+      attackTargetPrefs = attackPrefsFromConfig(uiConfig);
       fillConfigForm(uiConfig);
       applyAllTargetSelectors();
       syncNmapFromConfig(uiConfig);
@@ -414,7 +427,7 @@ document.getElementById("btn-detect").addEventListener("click", () => detectNetw
 document.getElementById("btn-detect-apply").addEventListener("click", () => detectNetwork(true));
 
 function drillPayload(selectId, customInputId, extra = {}) {
-  const prefs = captureDrillTargetFrom(selectId, customInputId);
+  const prefs = captureAttackTargetFrom(selectId, customInputId);
   const attackTarget = prefs?.resolved || resolveTargetFrom(selectId, customInputId);
   return {
     target: attackTarget,
@@ -501,6 +514,7 @@ function renderAttackResult(job) {
   const r = job.result || {};
   const dir = r.session_dir || "";
   let html = `<p><strong>攻击目标:</strong> ${r.target || "—"}</p>`;
+  if (r.ports) html += `<p><strong>端口:</strong> ${r.ports}</p>`;
   html += renderSuiteSummary(r);
   html += `<p><strong>报告目录:</strong> ${dir}</p>`;
   if (r.reports?.html) {
@@ -582,7 +596,7 @@ async function runDrill(fromDefensePage) {
     : document.getElementById("btn-drill-attack");
   const selectId = fromDefensePage ? "defense-target-select" : "attack-target-select";
   const customId = fromDefensePage ? "defense-target-custom" : "attack-target-custom";
-  captureDrillTargetFrom(selectId, customId);
+  captureAttackTargetFrom(selectId, customId);
   btn.disabled = true;
   const data = await api("/api/drill", {
     method: "POST",
@@ -590,7 +604,7 @@ async function runDrill(fromDefensePage) {
   });
   btn.disabled = false;
   if (data.job_id) {
-    applyDrillTargetPrefs(drillTargetPrefs);
+    applyAttackTargetPrefs(attackTargetPrefs);
     if (fromDefensePage) {
       startDrillPoll(data.job_id, "defense-drill");
     } else {
@@ -606,6 +620,7 @@ document.getElementById("btn-drill-defense").addEventListener("click", () => run
 document.getElementById("btn-attack").addEventListener("click", async () => {
   const btn = document.getElementById("btn-attack");
   btn.disabled = true;
+  captureAttackTargetFrom("attack-solo-target-select", "attack-solo-target-custom");
   const tp = targetPayload("attack-solo-target-select", "attack-solo-target-custom");
   const payload = {
     ...tp,
@@ -619,7 +634,7 @@ document.getElementById("btn-attack").addEventListener("click", async () => {
   if (!data.job_id) return;
   if (data.mode === "drill") {
     captureDrillTargetFrom("attack-solo-target-select", "attack-solo-target-custom");
-    applyDrillTargetPrefs(drillTargetPrefs);
+    applyAttackTargetPrefs(attackTargetPrefs);
     startDrillPoll(data.job_id, "drill");
     switchPage("defense");
     return;
@@ -638,11 +653,15 @@ document.getElementById("btn-attack").addEventListener("click", async () => {
 document.getElementById("btn-perf").addEventListener("click", async () => {
   const btn = document.getElementById("btn-perf");
   btn.disabled = true;
+  captureAttackTargetFrom("attack-solo-target-select", "attack-solo-target-custom");
+  const tp = targetPayload("attack-solo-target-select", "attack-solo-target-custom");
+  const ports = document.getElementById("attack-ports").value.trim() || uiConfig.attack_ports || "22,80,443";
   const data = await api("/api/attack", {
     method: "POST",
     body: JSON.stringify({
-      target: uiConfig.perf_target || uiConfig.cidr,
-      ports: uiConfig.perf_ports || "22,80,443",
+      ...tp,
+      target: tp.target,
+      ports,
       perf: true,
     }),
   });
@@ -663,7 +682,7 @@ document.getElementById("btn-perf").addEventListener("click", async () => {
 document.getElementById("btn-defense").addEventListener("click", async () => {
   const btn = document.getElementById("btn-defense");
   btn.disabled = true;
-  captureDrillTargetFrom("defense-solo-target-select", "defense-solo-target-custom");
+  captureAttackTargetFrom("defense-solo-target-select", "defense-solo-target-custom");
   const tp = targetPayload("defense-solo-target-select", "defense-solo-target-custom");
   const data = await api("/api/defense", {
     method: "POST",
@@ -679,7 +698,7 @@ document.getElementById("btn-defense").addEventListener("click", async () => {
   btn.disabled = false;
   if (!data.job_id) return;
   if (data.mode === "drill") {
-    applyDrillTargetPrefs(drillTargetPrefs);
+    applyAttackTargetPrefs(attackTargetPrefs);
     startDrillPoll(data.job_id, "defense-drill");
     return;
   }

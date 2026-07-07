@@ -1,6 +1,7 @@
 """AI 分析引擎：Kimi API 风险评估、历史对比、结果缓存与本地降级。"""
 
 import json
+import ipaddress
 import re
 import sqlite3
 import sys
@@ -450,6 +451,27 @@ class AIAnalyzer:
                 for p in batch
             ]
 
+    @staticmethod
+    def _filter_rows_by_target(
+        rows: list[dict[str, Any]], target_str: str
+    ) -> list[dict[str, Any]]:
+        """只分析与任务目标一致的主机端口。"""
+        target_str = (target_str or "").strip()
+        if not target_str or not rows:
+            return rows
+        if "/" in target_str:
+            try:
+                network = ipaddress.ip_network(target_str, strict=False)
+                return [
+                    r
+                    for r in rows
+                    if r.get("host_ip")
+                    and ipaddress.ip_address(str(r["host_ip"])) in network
+                ]
+            except ValueError:
+                return rows
+        return [r for r in rows if r.get("host_ip") == target_str]
+
     def analyze_task(self, task_id: int) -> dict[str, Any]:
         """
         分析指定扫描任务的所有开放端口，并更新数据库。
@@ -473,6 +495,12 @@ class AIAnalyzer:
                 """,
                 (task_id,),
             ).fetchall()
+
+            task_row = conn.execute(
+                "SELECT target FROM scan_tasks WHERE task_id = ?", (task_id,)
+            ).fetchone()
+            target_str = str(task_row["target"] or "").strip() if task_row else ""
+            rows = self._filter_rows_by_target([dict(r) for r in rows], target_str)
 
             if not rows:
                 conn.close()

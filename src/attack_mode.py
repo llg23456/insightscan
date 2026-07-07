@@ -15,7 +15,7 @@ from src.protocol_analyzer import capture_with_tshark, generate_protocol_diagram
 from src.report_generator import ReportGenerator
 from src.scan_engine import ScanEngine
 from src.session_paths import create_session_dir
-from src.utils import get_setting, init_db, setup_logging, validate_ip
+from src.utils import get_db_connection, get_setting, init_db, setup_logging, validate_ip
 from src.visual_export import save_port_bar_chart, save_risk_pie_chart
 
 
@@ -26,6 +26,56 @@ ATTACK_TYPE_LABELS: dict[str, str] = {
     "syn": "SYN 半开扫描",
     "fin": "FIN 隐蔽扫描",
 }
+
+
+def _count_ports_for_target(scan_result: dict[str, Any], expected_target: str) -> int:
+    """统计与本次攻击目标一致的主机开放端口数（用于选取报告任务）。"""
+    if scan_result.get("target") != expected_target:
+        return -1
+    if "error" in scan_result:
+        return -1
+    total = 0
+    single_ip = "/" not in expected_target.strip()
+    for host in scan_result.get("hosts", []):
+        host_ip = host.get("ip", "")
+        if single_ip and host_ip != expected_target.strip():
+            continue
+        total += len(host.get("ports", []))
+    return total
+
+
+def _verify_task_target(task_id: int, expected_target: str) -> bool:
+    """确认数据库任务的目标与页面提交一致。"""
+    conn = get_db_connection()
+    if isinstance(conn, dict):
+        return False
+    try:
+        row = conn.execute(
+            "SELECT target FROM scan_tasks WHERE task_id = ?", (task_id,)
+        ).fetchone()
+        return bool(row and str(row["target"]).strip() == expected_target.strip())
+    finally:
+        conn.close()
+
+
+def _select_report_task_id(
+    suite_runs: list[dict[str, Any]], expected_target: str
+) -> Optional[int]:
+    """
+    选取用于 AI/报告的任务 ID：必须与 expected_target 一致，优先 Connect。
+    不再按「开放端口最多」选取，避免误用其它主机的扫描结果。
+    """
+    ordered = sorted(
+        suite_runs,
+        key=lambda r: (0 if r.get("scan_type") == "connect" else 1),
+    )
+    for entry in ordered:
+        tid = entry.get("task_id")
+        if not tid or not entry.get("success"):
+            continue
+        if _verify_task_target(int(tid), expected_target):
+            return int(tid)
+    return None
 
 
 def run_attack_suite(
@@ -75,9 +125,6 @@ def run_attack_suite(
     log.info("目标: %s | 端口: %s | 类型: %s", target, ports, selected)
 
     suite_runs: list[dict[str, Any]] = []
-    best_task_id: Optional[int] = None
-    best_ports = -1
-    total_duration = 0.0
 
     for scan_type in selected:
         label = ATTACK_TYPE_LABELS.get(scan_type, scan_type)
@@ -93,14 +140,9 @@ def run_attack_suite(
             "stats": scan_result.get("stats"),
         }
         suite_runs.append(entry)
-        if "error" not in scan_result:
-            open_ports = scan_result.get("stats", {}).get("total_ports", 0)
-            total_duration += float(scan_result.get("duration") or 0)
-            if open_ports >= best_ports:
-                best_ports = open_ports
-                best_task_id = scan_result["task_id"]
 
-    if not best_task_id:
+    report_task_id = _select_report_task_id(suite_runs, target)
+    if not report_task_id:
         return {
             "error": "所有扫描类型均失败（SYN/FIN 需 sudo）",
             "session_dir": str(session_dir),
@@ -108,25 +150,36 @@ def run_attack_suite(
             "scan_types_used": selected,
         }
 
+    report_ports = 0
+    report_hosts = 0
+    report_duration = 0.0
+    for entry in suite_runs:
+        if entry.get("task_id") == report_task_id:
+            stats = entry.get("stats") or {}
+            report_ports = stats.get("total_ports", 0)
+            report_hosts = stats.get("total_hosts", 0)
+            report_duration = float(entry.get("duration") or 0)
+            break
+
     summary: dict[str, Any] = {
         "mode": "attack",
         "target": target,
         "session_dir": str(session_dir),
         "screenshots_dir": str(screenshots),
-        "task_id": best_task_id,
+        "task_id": report_task_id,
         "attack_suite": suite_runs,
         "scan_types_used": selected,
         "random_subset": random_subset,
         "scan": {
-            "duration": round(total_duration, 2),
-            "hosts": suite_runs[-1].get("stats", {}).get("total_hosts", 0),
-            "ports": best_ports,
+            "duration": round(report_duration, 2),
+            "hosts": report_hosts,
+            "ports": report_ports,
         },
     }
 
-    log.info("[2/5] AI 风险分析（基于最佳扫描 task_id=%s）...", best_task_id)
+    log.info("[2/5] AI 风险分析（基于 task_id=%s，目标 %s）...", report_task_id, target)
     analyzer = AIAnalyzer()
-    ai_result = analyzer.analyze_task(best_task_id)
+    ai_result = analyzer.analyze_task(report_task_id)
     api_status = ai_result.get("api_key_status")
     if not api_status:
         api_status = "已配置" if analyzer._api_available else "未配置或无效"
@@ -144,7 +197,7 @@ def run_attack_suite(
 
     log.info("[3/5] 生成报告...")
     gen = ReportGenerator()
-    data = gen._load_task_data(best_task_id)
+    data = gen._load_task_data(report_task_id, scan_duration=report_duration)
     screenshots_paths = {}
     if "error" not in data:
         counts = gen._count_risks(data["results"])
@@ -158,16 +211,16 @@ def run_attack_suite(
         }
 
     md = gen.generate(
-        best_task_id, fmt="markdown",
+        report_task_id, fmt="markdown",
         output_path=str(session_dir / "attack_report.md"),
-        scan_duration=total_duration,
+        scan_duration=report_duration,
         ai_stats=summary.get("ai_analysis"),
     )
     html = gen.generate(
-        best_task_id, fmt="html",
+        report_task_id, fmt="html",
         output_path=str(session_dir / "attack_report.html"),
         session_dir=session_dir,
-        scan_duration=total_duration,
+        scan_duration=report_duration,
         ai_stats=summary.get("ai_analysis"),
     )
     summary["reports"] = {"markdown": md.get("file_path"), "html": html.get("file_path")}
